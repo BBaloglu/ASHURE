@@ -1,2 +1,2 @@
 # ASHURE
-A sure heuristic under random events - Metabarcoding with Nanopore sequencing
+A sure heuristic under random events - Python script for analysis of metabarcoding data with Nanopore sequencing
