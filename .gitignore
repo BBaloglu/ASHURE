@@ -1,0 +1,25 @@
+# ignore output from bowtie
+*/__pycache__/
+*/MISC/
+runs/
+ref/
+*.bam
+*.sam
+*.paf
+*.index*
+*.mmi
+*.bt2
+*.fasta
+*.fastq
+*.fa
+*.fq
+*.MSA_in
+*.MSA_out
+*.spoa_out
+*/frags/
+*/msa/
+*.phred
+*.csv.gz
+*.csv
+.ipynb_checkpoints
+*.pdf
