@@ -3,6 +3,8 @@
 */MISC/
 runs/
 ref/
+basecalled_fastq/
+basecalled*/
 *.bam
 *.sam
 *.paf
@@ -13,8 +15,7 @@ ref/
 *.fastq
 *.fa
 *.fq
-*.MSA_in
-*.MSA_out
+*.msa_out
 *.spoa_out
 */frags/
 */msa/

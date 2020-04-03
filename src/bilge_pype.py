@@ -23,6 +23,7 @@ import time
 import datetime
 import glob
 import sys
+import logging
 
 def append_to_log(text, logfile='log.txt'):
     '''
@@ -34,6 +35,16 @@ def append_to_log(text, logfile='log.txt'):
     f.write(timestamp + ' pid['+str(os.getpid())+'] ' + text+'\n')
     f.close()
     print(text)
+
+def init_log(fname='ashure.log', level='DEBUG'):
+    fmt = '%(asctime)s.%(msecs)03d %(levelname)s: %(message)s'
+    dfmt = '%Y-%m-%d %H:%M:%S' 
+    if level=='WARNING':
+        logging.basicConfig(filename=fname, format=fmt, datefmt=dfmt, level=logging.WARNING)
+    elif level=='INFO':
+        logging.basicConfig(filename=fname, format=fmt, datefmt=dfmt, level=logging.INFO)
+    elif level=='DEBUG':
+        logging.basicConfig(filename=fname, format=fmt, datefmt=dfmt, level=logging.DEBUG)
 
 def get_ONT_header(text):
     text = text.split(' ')
