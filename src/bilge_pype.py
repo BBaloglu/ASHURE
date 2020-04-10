@@ -25,72 +25,54 @@ import glob
 import sys
 import logging
 
-def append_to_log(text, logfile='log.txt'):
-    '''
-    write text to a log file and also print out what was written
-    '''
-    timestamp = datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S.%f ')
-    
-    f = open(logfile,'a')
-    f.write(timestamp + ' pid['+str(os.getpid())+'] ' + text+'\n')
-    f.close()
-    print(text)
+def init_log(fname=None, level='DEBUG'):
+    fmt = 'pid['+str(os.getpid())+'] %(asctime)s.%(msecs)03d %(levelname)s: %(message)s'
+    dfmt = '%Y-%m-%d %H:%M:%S'
+    formatter = logging.Formatter(fmt, datefmt=dfmt)
+    # print log to a file
+    N=1
+    if type(fname)==str:
+        file_handler = logging.FileHandler(filename=fname)
+        file_handler.setLevel(level)
+        file_handler.setFormatter(formatter)
+        N=2 # adds file_handler only once
+        if len(logging.getLogger().handlers) <= N:
+            logging.getLogger().addHandler(file_handler)
+    # print to stdout
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setLevel(level)
+    stdout_handler.setFormatter(formatter)
+    # add stream handler only once
+    if len(logging.getLogger().handlers) <= N:
+        logging.getLogger().addHandler(stdout_handler)
+    logging.getLogger().setLevel(level)
 
-def init_log(fname='ashure.log', level='DEBUG'):
-    fmt = '%(asctime)s.%(msecs)03d %(levelname)s: %(message)s'
-    dfmt = '%Y-%m-%d %H:%M:%S' 
-    if level=='WARNING':
-        logging.basicConfig(filename=fname, format=fmt, datefmt=dfmt, level=logging.WARNING)
-    elif level=='INFO':
-        logging.basicConfig(filename=fname, format=fmt, datefmt=dfmt, level=logging.INFO)
-    elif level=='DEBUG':
-        logging.basicConfig(filename=fname, format=fmt, datefmt=dfmt, level=logging.DEBUG)
-
-def get_ONT_header(text):
+def parse_ONT_header(text):
     text = text.split(' ')
-    readid = text[0][1:]
-    for i in range(0,len(text)):
-        line = text[i].split('=')
-        if line[0]=='read':
-            read = int(line[1])
-            line = text[i+1].split('=')
-            chan = int(line[1])
-            line = text[i+2].split('=')
-            datetime = line[1].split('T')
-            day = datetime[0]
-            time = datetime[1].split('Z')[0]
-            return [readid, read, chan, day+' '+time]
-    return -1 # catch errors
-    
-def read_ONT_fastq(file):
-    '''
-    Function to parse fastq file and generate a pandas dataframe of the following info
-    
-    file = fastq file to parse
-    output = pandas dataframe with columns = [file, id, read, channel, datetime, length, sequence, quality]
-    '''    
-    
-    # open file and read it
-    f = open(file,'r')
-    text = f.read()
-    f.close()
-    
-    # split lines and get relevant info
-    text = text.split('\n')
-    header = text[0::4] # header is the first line
-    seq = text[1::4] # sequence is second line
-    quality = text[3::4] # quality score is third lines
-    header = header[:len(seq)]
+    key = {'read':1,'ch':2,'start_time':3}
+    out = [None]*(len(key)+1)
+    out[0] = text[0]
+    for line in text[1:]:
+        line = line.split('=')
+        if line[0] in key:
+            out[key[line[0]]] = line[1] 
+    return out
+
+def add_ONT_header(df):
+    df = df.copy()
     data = []
-    for i in range(0,len(header)):
-        h = get_ONT_header(header[i])
-        data.append([file,h[0],h[1],h[2],h[3],len(seq[i]),seq[i],quality[i]])
-    # return as pandas dataframe table
-    col = ['file','id','read','chan','datetime','length','sequence','quality']
-    return pd.DataFrame(data, columns=col)
+    for h in df['id'].values:
+        data.append(parse_ONT_header(h))
+    data = pd.DataFrame(data, columns=['id','read','ch','start_time'])
+    for c in data.columns:
+        df[c] = data[c].values
+    col = ['read','ch']
+    for c in col:
+        df[c] = df[c].astype(int)
+    return df
 
 # Function to load fastq data and primer info
-def load_basecalled_data(files, log_file='log.txt'):
+def load_ONT_fastq(files, low_mem=False):
     '''
     Function to load fastq info from list of ONT fastq files
     files = list of fastq files
@@ -100,12 +82,20 @@ def load_basecalled_data(files, log_file='log.txt'):
     start = time.time()
     df = []
     for i in range(0,len(files)):
-        df.append(read_ONT_fastq(files[i])) # Save tables as a vector
+        df.append(read_fastq(files[i], low_mem=low_mem)) # Save tables as a vector
         if i%20==0: # print out progress
-            append_to_log('Processing '+str(i)+'/'+str(len(files))+', current file = '+files[i], log_file)
-            append_to_log('elapse = {0:.2f}'.format(time.time()-start)+'s', log_file)
+            logging.info('Processing '+str(i)+'/'+str(len(files))+', current file = '+files[i])
+            logging.info('elapse = {0:.2f}'.format(time.time()-start)+'s')
     df = pd.concat(df) # Merge all the tables
-    df['datetime'] = pd.to_datetime(df['datetime']) # Format to datetime
+    logging.info('adding ONT header info')
+    df = add_ONT_header(df)
+    # add sequence length info
+    if 'rlen' in df.columns:
+        df['length'] = df['rlen']
+    elif 'sequence' in df.columns:
+        df['length'] = [len(i) for i in df['sequence']]
+    # format datetime
+    df['start_time'] = pd.to_datetime(df['start_time'])
     return df
 
 def load_primers(primer_file):
@@ -121,106 +111,195 @@ def load_primers(primer_file):
 
     output = pandas dataframe of primer information
     '''
-    print('Reading primers from ',primer_file)
+    logging.info('Reading primers from '+primer_file)
     df = pd.read_csv(primer_file, delimiter = ',')
     # safety checks on the primer data
     L1 = len(df)
     df = df.dropna()
     L2 = len(df)
     if L1!=L2:
-        print('Warning: nan info was dropped from primer data')
+        logging.warning('Warning: nan info was dropped from primer data')
     
     # check basic info is there
     col = ['fwd_id','fwd_seq','rev_id','rev_seq']
     for c in col:
         if (c in df.columns) == False:
-            print('column '+c+' not found in ',primer_file)
+            logging.error('column '+c+' not found in '+primer_file)
             sys.exit(1)
     return df
-        
-def read_fastq(file, low_mem=False):
+
+def add_seq(df):
+    '''
+    Adds sequence and quality information back to dataframe
+    df = dataframe containing at least the columns:
+        [filename, id, seek1, rlen] for fasta files
+        [filename, id, seek1, seek2, rlen] for fastq files
+    return dataframe with columns [id, sequence, quality] or [id, sequence]
+    '''
+    # if data is already there, dont do anything
+    if 'sequence' in df.keys():
+        return df
+    # check if relevant columns are there
+    cols = ['filename','id','seek1','rlen']
+    for c in cols:
+        if (c in df.keys())==False:
+            logging.warning('columns '+c+' not found in dataframe')
+            return df
+    # sort and iterate
+    df = df.sort_values(by=['filename','seek1']).copy()
+    data = []
+    if 'seek2' in df.keys():
+        # work on fastq
+        x = df[['filename','id','seek1','seek2','rlen']].values
+        files = np.unique(x[:,0])
+        for fname in files:
+            y = x[x[:,0]==fname]
+            with open(fname,'r') as f:
+                for i in range(0,len(y)):
+                    f.seek(y[i,2])
+                    seq = f.read(y[i,4])
+                    f.seek(y[i,3])
+                    q = f.read(y[i,4])
+                    data.append([seq, q])
+        data = np.array(data)
+        df['sequence'] = data[:,0]
+        df['quality'] = data[:,1]
+        cols = ['seek1','seek2','rlen','filename']
+        df = df.drop(columns=cols)
+    else:
+        # work on fasta
+        x = df[['filename','id','seek1','rlen']].values
+        files = np.unique(x[:,0])
+        for fname in files:
+            y = x[x[:,0]==fname]
+            with open(fname,'r') as f:
+                for i in range(0,len(y)):
+                    f.seek(y[i,2])
+                    seq = f.read(y[i,3])
+                    seq = seq.replace('\n','')
+                    data.append(seq)
+        data = np.array(data)
+        df['sequence'] = data
+        cols = ['seek1','rlen','filename']
+        df = df.drop(columns=cols)
+    return df
+
+def read_fastq(fname, low_mem=False):
     '''
     Reads list of sequences from a fastq file format.
     
-    file = file to read the information
+    fname = fname to read the information
+    low_mem = saves memory by not storing sequence and quality strings.
+            Instead this function returns columns [filename, id, seek1, seek2, rlen]
+            Use add_seq function to add back sequence and quality to the dataframe
     returns list of names, sequence, quality
     '''
-    # open file and read it
-    f = open(file,'r')
-    text = f.read()
-    f.close()
-    
-    # split lines and get relevant info
-    text = text.split('\n')
-    header = text[0::4] # header is the first line
-    sequence = text[1::4] # sequence is second line
-    quality = text[3::4] # quality score is third lines
-    header = header[:len(sequence)]
     data = []
-    for i in range(0,len(header)):
-        data.append([header[i],sequence[i],quality[i]])
-    return pd.DataFrame(data, columns=['id','sequence','quality'])
+    with open(fname,'r') as f:
+        fsize = os.path.getsize(fname)
+        while fsize > f.tell():
+            rid = f.readline()[:-1]
+            s1 = f.tell()
+            seq = f.readline()[:-1]
+            f.seek(f.tell()+2)
+            q = f.readline()[:-1]
+            L = len(seq)
+            if low_mem:
+                data.append([rid[1:], s1, L])
+            else:
+                data.append([seq, q, rid[1:]])
+    col = ['sequence','quality','id','seek1','rlen']
+    if low_mem:
+        data = pd.DataFrame(data, columns=col[2:])
+        data['seek2'] = data['seek1']+data['rlen']+3
+        data['filename'] = fname
+    else:
+        data = pd.DataFrame(data, columns=col[:3])
+    return data
 
-def write_fastq(file, data):
+def write_fastq(fname, data):
     '''
     Write list of sequences into a fastq file format.
     
     data =  array with [id, sequence, quality] as the columns
-    file = file to write the information
+    fname = file to write the information
     '''
-    f = open(file,'w')
-    if len(data.shape) > 1: # case for table
-        for i in data:
-            text = '@' + str(i[0]) + '\n'
-            text+= str(i[1]) + '\n'
+    with open(fname,'w') as f:
+        if len(data.shape) > 1: # case for table
+            for i in data:
+                text = '@' + str(i[0]) + '\n'
+                text+= str(i[1]) + '\n'
+                text+= '+\n'
+                text+= str(i[2]) + '\n'
+                f.write(text)
+        else: # case for single row
+            text = '@' + data[0] + '\n'
+            text+= str(data[1]) + '\n'
             text+= '+\n'
-            text+= str(i[2]) + '\n'
+            text+= str(data[2]) + '\n'
             f.write(text)
-    else: # case for single row
-        text = '@' + data[0] + '\n'
-        text+= str(data[1]) + '\n'
-        text+= '+\n'
-        text+= str(data[2]) + '\n'
-        f.write(text)
-    f.close()
 
-def read_fasta(file):
+def read_fasta(fname, low_mem=False):
     '''
     Reads list of sequences from a fasta file format.
     
-    file = file to read the information
+    fname = file to read the information
     returns list of sequence and names
     '''
-    f = open(file,'r')
-    text = f.read().split('>')[1:]
-    f.close()
     data = []
-    for i in text:
-        i = i.split('\n')
-        data.append([i[0],''.join(i[1:])])
-    out = pd.DataFrame(data, columns=['id','sequence'])
-    return out
+    with open(fname,'r') as f:
+        seq = ''
+        fsize = os.path.getsize(fname)
+        while fsize > f.tell():
+            line = f.readline()
+            if line[0]=='>':
+                # record it once new line is hit
+                if seq!='':
+                    L = len(seq)
+                    seq = seq.replace('\n','')
+                    if low_mem:
+                        data.append([rid, s1, L])
+                    else:
+                        data.append([seq, rid])
+                # start the new entry 
+                rid = line[1:-1]
+                s1 = f.tell()
+                seq = ''
+            else:
+                seq+= line
+    # end of file reached, run last loop
+    L = len(seq)
+    seq = seq.replace('\n','')
+    # export the data
+    col = ['sequence','id','seek1','rlen']
+    if low_mem:
+        data.append([rid, s1, L])
+        data = pd.DataFrame(data, columns=col[1:])
+        data['filename'] = fname
+    else:
+        data.append([seq, rid])
+        data = pd.DataFrame(data, columns=col[:2])
+    return data
 
-def write_fasta(file, data):
+def write_fasta(fname, data):
     '''
     Write list of sequences into a fasta file format.
     
     data =  array with [id, sequence] as the columns
-    file = file to write the information
+    fname = file to write the information
     '''
-    f = open(file,'w')
-    if len(data.shape) > 1: # case for table
-        for i in data:
-            text = '>' + str(i[0]) + '\n'
-            text+= str(i[1]) + '\n'
+    with open(fname,'w') as f:
+        if len(data.shape) > 1: # case for table
+            for i in data:
+                text = '>' + str(i[0]) + '\n'
+                text+= str(i[1]) + '\n'
+                f.write(text)
+        else: # case for single row
+            text = '>' + str(data[0]) + '\n'
+            text+= str(data[1]) + '\n'
             f.write(text)
-    else: # case for single row
-        text = '>' + str(data[0]) + '\n'
-        text+= str(data[1]) + '\n'
-        f.write(text)
-    f.close()
 
-def get_SAMinfo(read, key): # debug rewrite sam file parser to be more efficient
+def get_SAM_info(read, key): # debug rewrite sam file parser to be more efficient
     '''
     Function to parse useful info from a line of the SAM file
     '''
@@ -239,7 +318,7 @@ def get_SAMinfo(read, key): # debug rewrite sam file parser to be more efficient
     mapq = int(read[4])
     cigar = read[5]
     # get another sam info
-    info = [0]*len(key)
+    info = np.array([0]*len(key))
     if rname != '*':
         for i in range(11,len(read)):
             x = read[i].split(':') # parse it backwards
@@ -248,39 +327,36 @@ def get_SAMinfo(read, key): # debug rewrite sam file parser to be more efficient
     data = [qname, rname, orientation, flag, pos1, pos2, mapq, cigar]
     return data, info
 
-def parse_SAMfile(file):
+def parse_SAM(fname):
     '''
     This function parses the information from a SAM file and returns a dataframe   
     '''
-    f = open(file)
-    text = f.read()
-    f.close()
-
-    # Removing the header
-    text = text.split('\n@PG')[-1].split('\n')[1:-1]
-    data = []
-    i = 0
+    fsize = os.path.getsize(fname)
+    record = False
     col1 = ['query_id','database_id','orientation','flag','t_start','t_end','mapq','CIGAR']
     col2 = ['AS','XS','XN','XM','XO','XG','NM']
     key = {col2[i]:i for i in range(0,len(col2))}
-    while i < len(text):
-        out, info = get_SAMinfo(text[i], key)
-        if out[3][-2] == '1':
-            # if it is a paired read, look for its pair on the next line
-            i = i+1
-            out2, info2 = get_SAMinfo(text[i], key)
-            out[0]+= ' '+out2[0]
-            out[7]+= ' '+out2[7]
-            for j in range(0,len(info)):
-                info[j]+=info2[j]
-        data.append(out+info)
-        # increment the counter
-        i = i+1
+    data = []
+    with open(fname,'r') as f:
+        while fsize > f.tell():
+            text = f.readline()
+            # dont record anything until we read past the header:w
+            if text[:3]=='\n@PG':
+                start = True
+                text = f.readline()
+            # start recording data
+            if record:
+                out, info = get_SAM_info(text, key)
+                if out[3][-2] == '1':
+                    text = f.readline()
+                    out2, info2 = get_SAM_info(text, key)
+                    out[0]+= ' '+out2[0]
+                    out[7]+= ' '+out2[7]
+                    info = info+info2
+                data.append(out+[j for j in info])
     return pd.DataFrame(data, columns=col1+col2)
 
-def run_bowtie2(query, database, workspace='./bowtie2/',
-                config='-a --very-sensitive-local --threads 1 --quiet',
-                build_index=True, cleanup=False, log_file='log.txt'):
+def run_bowtie2(query, database, workspace='./bowtie2/', config='-a --very-sensitive-local --threads 1 --quiet', build_index=True, cleanup=False):
     '''
     This is a wrapper for the bowtie2 aligner.
 
@@ -298,18 +374,20 @@ def run_bowtie2(query, database, workspace='./bowtie2/',
     workspace = defines where input and output files for bowtie2 resides
     config = defines the config options to pass to bowtie2
     '''
+    workspace = check_dir(workspace)
+    # load sequence incase low mem option is used 
+    query = add_seq(query) 
+    database = add_seq(database)
     # Define locations of input and output files for bowtie
-    qfile = workspace+'fwdp.fa'
-    mfile = workspace+'revp.fa'
+    qfile = workspace+'read1.fa'
+    mfile = workspace+'read2.fa'
     dbfile = workspace+'database.fa'
     outfile = workspace+'results.sam'
     btfile = workspace+'index'
 
-    check_dir(workspace)
-
     # Only build index when we need to. Index building takes a lot of time
     if build_index == True:
-        value = check_seqdf(database, log_file)
+        value = check_seqdf(database)
         if value == 2:
             write_fasta(dbfile, database[['id','sequence','quality']].values)
             cmd = 'bowtie2-build --quiet -q '+dbfile+' '+btfile+' --threads 2'
@@ -321,7 +399,7 @@ def run_bowtie2(query, database, workspace='./bowtie2/',
         subprocess.run(cmd.split(' '))
 
     # Write input files
-    value = check_seqdf(database, log_file)
+    value = check_seqdf(database)
     if value == 4:
         write_fastq(qfile, query[['fwd_id','fwd_seq','fwd_quality']].values)
         write_fastq(mfile, query[['rev_id','rev_seq','fwd_quality']].values)
@@ -341,7 +419,7 @@ def run_bowtie2(query, database, workspace='./bowtie2/',
 
     # call bowtie2
     subprocess.run(cmd.split(' '))
-    data = parse_SAMfile(outfile)
+    data = parse_SAM(outfile)
 
     # add q_len and t_len info
     q_len = np.transpose([query['id'].values, [len(i) for i in query['sequence']]])
@@ -367,8 +445,7 @@ def run_bowtie2(query, database, workspace='./bowtie2/',
         subprocess.run(['rm', '-r', workspace])
     return data
 
-def run_bwa(query, database, workspace='./bwa/', config=' mem -a ',
-            build_index=True, log_file='log.txt', cleanup=False):
+def run_bwa(query, database, workspace='./bwa/', config=' mem -a ', build_index=True, cleanup=False):
     '''
     This is a wrapper for the bwa aligner.
 
@@ -386,18 +463,19 @@ def run_bwa(query, database, workspace='./bwa/', config=' mem -a ',
     workspace = defines where input and output files for bowtie2 resides
     config = defines the config options to pass to bowtie2
     '''
+    workspace = check_dir(workspace)
+    # load sequence incase low mem option is used 
+    query = add_seq(query) 
+    database = add_seq(database)
     # Define locations of input and output files for bowtie
     qfile = workspace+'read1.fq'
     mfile = workspace+'read2.fq'
     dbfile = workspace+'database.fa'
     outfile = workspace+'results.sam'
 
-    # Make the working workspace if it does not exist
-    check_dir(workspace)
-
     # Only build index when we need to. Index building takes a lot of time
     if build_index:
-        value = check_seqdf(database, log_file)
+        value = check_seqdf(database)
         if value == 2:
             write_fasta(dbfile, database[['id','sequence','quality']].values)
         elif value == 1:
@@ -408,7 +486,7 @@ def run_bwa(query, database, workspace='./bwa/', config=' mem -a ',
         subprocess.run(cmd.split(' '))
 
     # Check if we are aligning paired reads
-    value = check_seqdf(query, log_file)
+    value = check_seqdf(query)
     
     paired = False
     if value == 4:
@@ -435,7 +513,7 @@ def run_bwa(query, database, workspace='./bwa/', config=' mem -a ',
     subprocess.run(cmd.split(' '))
 
     # extract the SAM file information
-    data = parse_SAMfile(outfile)
+    data = parse_SAM(outfile)
 
     # add q_len and t_len info
     q_len = np.transpose([query['id'].values, [len(i) for i in query['sequence']]])
@@ -461,22 +539,19 @@ def run_bwa(query, database, workspace='./bwa/', config=' mem -a ',
         subprocess.run(['rm','-r',workspace])
     return data
 
-def parse_PAFfile(file):
+def parse_PAF(fname):
     '''
     This function parses the information from a PAF file and returns a dataframe
     '''
-    # parse the sam file
-    f = open(file)
-    text = f.read().split('\n')
-    f.close()
+    with open(fname,'r') as f:
+        text = f.read().split('\n')
     
     if len(text[-1])==0:
         text = text[:-1] # removes the last line that is empty    
     data = []
     
     # information we are parsing
-    col1 = ['query_id','q_len','q_start','q_end','orientation',
-            'database_id','t_len','t_start','t_end','match','tot','mapq']
+    col1 = ['query_id','q_len','q_start','q_end','orientation','database_id','t_len','t_start','t_end','match','tot','mapq']
     col2 = ['tp','cm','s1','s2','NM','AS','ms','nn','rl','cg']
     key = {col2[i]:i for i in range(0,len(col2))}
     for line in text:
@@ -490,11 +565,10 @@ def parse_PAFfile(file):
         # save the data
         data.append(out[:len(col1)]+info)
     data = pd.DataFrame(data, columns=col1+col2)
-    data = data.rename(columns = {'cg':'CIGAR'})
+    data = data.rename(columns={'cg':'CIGAR'})
     return data
 
-def run_minimap2(query, database, workspace = './minimap2/', config = '-x map-ont', cigar = True,
-                 build_index = True, use_index = False, cleanup = False, log_file = 'log.txt'):
+def run_minimap2(query, database, workspace='./minimap2/', config='-x map-ont', cigar=True, build_index=True, use_index=False, cleanup=False):
     '''
     This is a wrapper for the minimap2 aligner. This aligner is better suited for long reads (>100bp)
 
@@ -513,17 +587,20 @@ def run_minimap2(query, database, workspace = './minimap2/', config = '-x map-on
     workspace = defines where input and output files for bowtie2 resides
     config = defines the config options to pass to bowtie2
     '''
+    workspace = check_dir(workspace)
+    # load sequence incase low mem option is used 
+    query = add_seq(query) 
+    database = add_seq(database)
+
     # Define locations of input and output files for bowtie
     qfile = workspace+'read1.fq'
     mfile = workspace+'read2.fq'
     dbfile = workspace+'database.fq'
     outfile = workspace+'results.paf'
     btfile = workspace+'index.mmi'
-
-    check_dir(workspace)
-
+    
     # Write database to fasta or fastq
-    value = check_seqdf(database, log_file)
+    value = check_seqdf(database)
     if value == 2:
         write_fastq(dbfile, database[['id','sequence','quality']].values)
     elif value == 1:
@@ -537,7 +614,7 @@ def run_minimap2(query, database, workspace = './minimap2/', config = '-x map-on
         subprocess.run(cmd.split(' '))
         
     # Write query to fasta or fastq
-    value = check_seqdf(query, log_file)
+    value = check_seqdf(query)
     paired = False
     if value == 4:
         write_fastq(qfile, query[['fwd_id','fwd_seq','fwd_quality']].values)
@@ -568,7 +645,7 @@ def run_minimap2(query, database, workspace = './minimap2/', config = '-x map-on
     subprocess.run(cmd.split(' '))
     
     # extract the PAF file information
-    data = parse_PAFfile(outfile)
+    data = parse_PAF(outfile)
     
     # Format the fields to integer
     x = ['q_len','q_start','q_end','t_len','t_start','t_end','match','tot','mapq',
@@ -586,11 +663,11 @@ def run_minimap2(query, database, workspace = './minimap2/', config = '-x map-on
         data.drop(columns = ['CIGAR'], inplace = True)
     
     # remove work folder
-    if cleanup and ~use_index and ~build_index:
+    if cleanup and ~use_index:
         subprocess.run(['rm','-r',workspace])
     return data
 
-def check_seqdf(df, log_file = 'log.txt'):
+def check_seqdf(df):
     '''
     This function looks at the header of the dataframe and checks if it is fasta, fastq, or paired fasta or fastq
     return 1 if fasta
@@ -625,8 +702,8 @@ def check_seqdf(df, log_file = 'log.txt'):
         return 4
     # if nothing matches, then print error message
     else:
-        append_to_log('columns of data = '+''.join(cols), log_file)
-        append_to_log('''
+        logging.error('columns of data = '+''.join(cols))
+        logging.error('''
         Input dataframe does not have the proper header.
         
         The following are valid columns
@@ -635,21 +712,33 @@ def check_seqdf(df, log_file = 'log.txt'):
         fastq data   = [id, sequence, quality]
         paired fasta = [fwd_id, fwd_seq, rev_id, rev_seq]
         paired fastq = [fwd_id, fwd_seq, fwd_quality, rev_id, rev_seq, rev_quality]
-        ''', log_file)
+        ''')
         return -1
 
-def check_dir(folder, overwrite=True):
+def check_dir(folder, overwrite=True, fname_only=False):
     '''
     This function checks if the directory exists. If it does not exist, make the directory
     '''
-    if folder[-1]!='/': folder+='/'
-
+    # make folder names consistent
+    folder = folder.split('/')
+    tmp = ''
+    for j in folder:
+        if j!='':
+            tmp+=j+'/'
+    folder = tmp
+    # don't make directory if not asked to
+    if fname_only:
+        return folder
+    # make directory if it does not exist
     if os.path.exists(folder) == False and overwrite:
-        print('Making directory ',folder)
+        logging.info('Making directory '+folder)
         cmd = 'mkdir ' + folder
         subprocess.run(cmd.split(' '))
         return folder
-    elif overwrite==False:
+    elif overwrite:
+        return folder
+    else:
+        # make find a new name if it does exist
         i=0
         while os.path.exists(folder[:-1]+str(i)+'/'):
             i+=1
@@ -738,7 +827,7 @@ def split_overlaps(df, thresh = 1):
     data = df.iloc[s[keep]]
     return data
 
-def remove_overlaps(frags, metric='AS', thresh=0, log_file='log.txt'):
+def remove_overlaps(frags, metric='AS', thresh=0):
     '''
     Function to filter out bad overlapping matches in sequences
     
@@ -751,7 +840,7 @@ def remove_overlaps(frags, metric='AS', thresh=0, log_file='log.txt'):
     '''
     df = frags.reset_index(drop=True)
     
-    append_to_log('filtering to best aligned fragments', log_file)
+    logging.info('filtering to best aligned fragments')
     f1 = find_overlaps(df[['query_id','q_start','q_end']], thresh = thresh)
     s = f1[f1['cluster_item_count']>1]
     # do work only on overlapping info
@@ -761,7 +850,7 @@ def remove_overlaps(frags, metric='AS', thresh=0, log_file='log.txt'):
         f1 = df.iloc[f1[f1['cluster_item_count']==1].index] # get single frags
         df = pd.concat([f1,f2]) # add them together
     # report results
-    append_to_log('Cleaned out '+str(len(frags) - len(df))+' of '+str(len(frags)), log_file)
+    logging.info('Cleaned out '+str(len(frags) - len(df))+' of '+str(len(frags)))
     return df
 
 def get_best(df, col, metric='AS', stat='idxmax'):
@@ -793,7 +882,7 @@ def run_msa(MSA_infiles, aligner='spoa', config='-l 0 -r 2', thread_lock=True):
             retval = j.wait(120)
             f.close() # close the file
             if retval!=0:
-                print('syntax error on spoa call: ',j)
+                logging.error('syntax error on spoa call: '+j)
                 return -1
     else:
         cmd = ''
@@ -942,8 +1031,7 @@ def find_endgap(seq):
             break
     return [s1,s2]
 
-def get_pairwise_distance(seq, block=500, output_folder='./pairwise_dist/', workspace='./pw_aligner/',
-                          config='-k15 -w10 -PD', log_file='log.txt', symmetric=False):
+def get_pairwise_distance(seq, block=500, output_folder='./pairwise_dist/', workspace='./pw_aligner/', config='-k15 -w10 -PD', symmetric=False):
     '''
     Function to compute pairwise distance matrix of a list of sequences
     seq = pandas dataframe of a list of sequences with columns [id, sequence]
@@ -951,13 +1039,12 @@ def get_pairwise_distance(seq, block=500, output_folder='./pairwise_dist/', work
     output_folder = where output csv files are stored
     workspace = workspace folder for the aligner
     configs = alignment config options for minimap2
-    log_file = log file to record progress
     symmetric = evaluates only pairwise alignments of a longer sequence 
                 to a shorter one and returns data for a symmetric matrix
                 symmetric evaluations take half time
     returns list of csv files where data is stored
     '''
-    check_dir(output_folder)
+    output_folder = check_dir(output_folder)
     df = seq.copy()
     # sort it by longest sequence first
     if symmetric:
@@ -983,7 +1070,7 @@ def get_pairwise_distance(seq, block=500, output_folder='./pairwise_dist/', work
         # only build index first time we use a new database
         build_index = True
         for j in range(js,len(df)):
-            append_to_log('processing block '+str(i)+','+str(j)+' '+str(count)+'/'+str(N), log_file)
+            logging.info('processing block '+str(i)+','+str(j)+' '+str(count)+'/'+str(N))
             count+=1
             out = run_minimap2(df[j], df[i], config = config, workspace = workspace, 
                                cigar = True, build_index = build_index, use_index = True)
@@ -1057,18 +1144,17 @@ def get_symmetric_matrix(df, sym_larger=False):
     dist['id'] = df['id'].values
     return dist
 
-def run_PCA(df, n_comp=2, recenter=False, ofile='', timestamp=True, log_file='log.txt'):
+def run_PCA(df, n_comp=2, recenter=False, ofile='', timestamp=True):
     '''
     Runs principle component analysis to compression dimensions 
     df = pandas dataframe with columns [id, d_i, ..., d_n]
     n_comps = components to reduce to
     ofile = output file prefix to save pca data
     timestamp = add timestamp to output file
-    log_file = log file to write to
     '''
     
     # initialize PCA settings
-    append_to_log('running pca with n_comp = '+str(n_comp), log_file)
+    logging.info('running pca with n_comp = '+str(n_comp))
 
     # get the vector
     col = df.columns[df.columns!='id']
@@ -1098,12 +1184,12 @@ def run_PCA(df, n_comp=2, recenter=False, ofile='', timestamp=True, log_file='lo
     return data
 
 def run_TSNE(df, n_comp=2, method='sklearn', metric='euclidean', perplexity=30, learning_rate=200, n_iter=1000,
-             ofile='', timestamp=True, log_file='log.txt', verbose=0):
+             ofile='', timestamp=True, verbose=0):
     '''
     Run tsne on input data
     df = pandas dataframe with columns [id, v_0, ..., v_i]
     '''
-    append_to_log('running sklearn tsne with n_comp = '+str(n_comp), log_file)
+    logging.info('running sklearn tsne with n_comp = '+str(n_comp))
     tsne = sklearn.manifold.TSNE(n_components=n_comp, perplexity=perplexity, metric=metric,
                          early_exaggeration=12.0, learning_rate=learning_rate,
                          n_iter=n_iter, n_iter_without_progress=300, verbose=verbose)
@@ -1122,276 +1208,50 @@ def run_TSNE(df, n_comp=2, method='sklearn', metric='euclidean', perplexity=30, 
         data.to_csv(fname, index=False, compression='infer')
     return data
 
-def cluster_sample(df_q, df_d=[], max_iter=100, block_thresh=0.9, N_rsamp=1, optics_thresh=5000,
-                   config ='-k15 -w10 -p 0.9 -D', workspace = './clust_sample/', log_file = 'log.txt'):
+def cluster_sample(df_q, df_d=[], N=100, th=0.9, rsize=1, config ='-k15 -w10 -p 0.9 -D', workspace = './clust_sample/'):
     '''
     Find get rough cluster centers for a set of sequence data
     df_q = dataframe of query sequences to search for cluster centers.
     df_d = dataframe of cluster centers with you want to append to
            df_q and df_d must both have at least columns [id, sequence]
-    max_iter = max iterations to run
-    block_thresh = threshold match_score in order to keep the alignment
-                   set higher if you want finer spacing between clusters
-    N_rsamp = numbers of random draws for new cluster centers to do
-    optics_thresh = threshold number of query sequences between sampling defaults to optics pairwise clustering
+    N = number of orthogonal sequences to draw
+    th = threshold match_score for excluding sequences which are not similar enough to the sample
+         set higher if you want finer spacing between clusters
+    rsize = number of samples to draw on each iteration
     workspace = workspace folder for the aligner
-    config = alignment config for minimap2
-    log_file = log file to record progress
+    config = config passed to minimap2
     '''
-    qry = df_q['id'].astype(str).drop_duplicates().values
+    qry = np.unique(df_q['id'].astype(str))
+    if len(qry)==0:
+        logging.info('cluster_sample: nothing to cluster')
+        return df_d
+    # initialize cluster center
+    df_c = pd.DataFrame([], columns=['id','sequence'])
     if len(df_d) > 0:
-        df_centers = df_d.copy()
+        df_c = df_c.append(df_d[['id','sequence']])
+        N+= len(df_c)
     else:
-        df_centers = []
-    
-    for j in range(0, max_iter):
-        append_to_log('cluster sample, i = '+str(j)+'/'+str(max_iter), log_file)
-        append_to_log('query length = '+str(len(qry))+' total clusters = '+str(len(df_centers)), log_file)
-        
-        # stop if there is nothing more to search
-        if len(qry) == 0: 
-            append_to_log('query length = 0 terminating loop', log_file)
-            break
-        
-        # run optics if the query size is small enough
-        elif len(qry) < optics_thresh:
-            seq = df_q[df_q['id'].isin(qry)]
-            df_c, df_clst = cluster_iter_optics(seq, center_size = 5, min_samples = 20, config = config,
-                                                workspace = workspace, log_file = log_file)
-            if len(df_centers) > 0 and len(df_c) > 0:
-                df_centers = pd.concat([df_centers[['id','sequence']], df_c])
-            elif len(df_centers) == 0 and len(df_c) > 0:
-                df_centers = df_c
-            break
-        
         # pick random sequence to partition the data
-        else:
-            # draw new centers and record them
-            ridx = np.random.permutation(len(qry))
-            db = df_q[df_q['id'].isin(qry[ridx[:N_rsamp]])][['id','sequence']]
-            if len(df_centers) > 0:
-                df_centers = pd.concat([df_centers[['id','sequence']], db])
-            else:
-                df_centers = db
-
-            seq = df_q[df_q['id'].isin(qry)]
-            out = run_minimap2(seq, db, config = config, cigar = True, workspace = workspace)
-            out = out[out['match_score'] > block_thresh]
-            
-            # make the new block to sequence in
-            qry = set(qry) - set(out['query_id'].astype(str)) - set(df_centers['id'].astype(str))
-            qry = np.array([i for i in qry])
-            
-    # return the data
-    if len(df_centers) > 0:
-        df_centers['id'] = ['cluster'+str(i) for i in range(0,len(df_centers))]
-    return df_centers
-
-def cluster_refine(df_q, df_d=[], max_iter=1, center_size=20, min_samples=5,
-                   N_rsamp=2000, thresh_split=0.9, thresh_merge=0.1, ofile='',
-                   timestamp=True, config ='-k15 -w10 -p 0.9 -D',
-                   workspace='./clust_refine/', log_file='log.txt'):
-    '''
-    Refines the cluster centers for a set of sequence data
-    df_q = dataframe of query sequences to search for cluster centers.
-    df_d = dataframe of cluster centers with you want to append to
-           df_q and df_d must both have at least columns [id, sequence]
-    center_size = number of sequences from cluster center to use for recomputation of cluster center sequence
-    max_iter = max iterations to run
-    thresh_split = 
-    thresh_merge = 
-    N_rsamp = numbers of random draws for new cluster centers to do
-    workspace = workspace folder for the aligner
-    ofile = output file prefix to use
-    config = alignment config for minimap2
-    log_file = log file to record progress
-    '''
-    
-    if len(df_d) > 0:
-        df_centers = df_d.copy()
-    else:
-        # use pseudo reference database file as initial cluster centers
-        append_to_log('guessing cluster centers via random sampling', log_file)
-        df_centers = cluster_sample(df_q, max_iter = 20, block_thresh = 0.8, N_rsamp = 1,
-                                    optics_thresh = N_rsamp, config = config,
-                                    workspace = workspace, log_file = log_file)
-    df_centers['split'] = False
-
-    for k in range(0, max_iter):
-        append_to_log('cluster_refine: iter = '+str(k)+'/'+str(max_iter), log_file)
-        append_to_log('cluster_refine: sweeping for rare sequences', log_file)
-        df_align = run_minimap2(df_q, df_centers, config = config, cigar = True,
-                                workspace = workspace, log_file = log_file)
-        #df_align = df_align[df_align['tp'] == 'P'] # keep only primary alignments
-        df_align = get_best(df_align, ['query_id'], 'match_score')
-        
-        cols = df_align['database_id'].drop_duplicates().values
-        df_centers = df_centers[df_centers['id'].isin(cols)]
-        append_to_log('cluster_refine: number of clusters = '+str(len(df_centers)), log_file)
-        
-        # do the sweep for rare sequences
-        p = 5 # get the lower 5 percent of bad alignments
-        p = np.percentile(df_align['match_score'].values, p)
-        c = df_align['match_score'] > p
-        uncover = set(df_q['id'].astype(str)) - set(df_align[c]['query_id'].astype(str))
-        append_to_log('cluster_refine: looking at match_score < '+str(p), log_file)
-        append_to_log('cluster_refine: query not covered '+str(len(uncover))+'/'+str(len(df_q)), log_file)
-        if len(uncover) > 0:
-            append_to_log('cluster_refine: looking for rare sequences in '+str(len(uncover))+' reads', log_file)
-            uncover = df_q[df_q['id'].isin([i for i in uncover])]
-            cout = cluster_sample(uncover, max_iter = 100, block_thresh = 0.8, N_rsamp = 1, 
-                                  optics_thresh = N_rsamp, config = config,
-                                  workspace = workspace, log_file = log_file)
-            if len(cout) > 0:
-                cout['split'] = True
-                df_centers = pd.concat([df_centers, cout])
-                df_centers['id'] = ['cluster'+str(i) for i in range(0,len(df_centers))]
-        
-        append_to_log('cluster_refine: splitting clusters based on threshold = '+str(thresh_split), log_file)
-        df_align = run_minimap2(df_q, df_centers, config = config, cigar = True,
-                                workspace = workspace, log_file = log_file)
-        
-        #df_align = df_align[df_align['tp'] == 'P'] # bin the cluster boundaries
-        df_align = get_best(df_align, ['query_id'], 'match_score')
-        
-        cols = df_align['database_id'].drop_duplicates().astype(str).values
-        df_centers = df_centers[df_centers['id'].isin(cols)]
-        append_to_log('cluster_refine: number of clusters = '+str(len(df_centers)), log_file)
-
-        d_dct = {cols[i]:i for i in range(0,len(cols))}
-        vec = get_feature_vector(df_align[['query_id','database_id','match_score']], d_dct = d_dct)
-        x = vec[cols].values.T
-        squeue = []
-        for i in range(0,len(cols)):
-            v = x[i]
-            n = v > 0
-            c1 = np.percentile(v[n], 25)
-            c2 = df_centers[df_centers['id']==cols[i]]['split'].values
-            if c1 < thresh_split or c2:
-                squeue.append(cols[i])
-        
-        clst = []
-        for i in range(0,len(squeue)):
-            qout = squeue[i]
-            append_to_log('cluster_refine: doing splitting on '+qout+' '+str(i)+'/'+str(len(squeue)), log_file)
-            cout = cluster_recenter([qout], df_q, vec, config = config,
-                                    N_rsamp = N_rsamp, thresh_split = 0,
-                                    center_size = center_size, min_samples = min_samples,
-                                    workspace = workspace, log_file = log_file)
-            if len(cout) > 0:
-                clst.append(cout)
-        
-        keep = set(df_centers['id'].astype(str)) - set(squeue)
-        df_centers = df_centers[df_centers['id'].isin([i for i in keep])]
-        clst.append(df_centers)
-        df_centers = pd.concat(clst)
-        df_centers['id'] = ['cluster'+str(i) for i in range(0,len(df_centers))]
-        
-        append_to_log('cluster_refine: merging clusters', log_file)
-        df_align = run_minimap2(df_q, df_centers, config = config, cigar = True,
-                                workspace = workspace, log_file = log_file)
-        cols = df_align['database_id'].drop_duplicates().astype(str).values
-        df_centers = df_centers[df_centers['id'].isin(cols)]
-        append_to_log('cluster_refine: number of clusters = '+str(len(df_centers)), log_file)
-        
-        # get the cosimilarity matrix
-        d_dct = {cols[i]:i for i in range(0,len(cols))}
-        vec = get_feature_vector(df_align[['query_id','database_id','AS']], d_dct = d_dct)
-        x = vec[cols].values
-        cosim = dist_cosine(x.T, x.T)
-
-        # run hierarchical clustering to find items to merge
-        cosim = pd.DataFrame(cosim, columns = cols)
-        cosim['id'] = cols
-        df_clst = cluster_hierarchical(cosim, metric = 'precomputed', linkage = 'complete',
-                                       thresh = 0.8, log_file = log_file)
-        # extract clusters to merge
-        mqueue = []
-        for i in range(0, np.max(df_clst['cluster_id'])+1):
-            x = df_clst[df_clst['cluster_id'] == i]['id'].values
-            if len(x) > 1:
-                mqueue.append([j for j in x])
-        n_merge = np.sum(df_clst['cluster_id'] > -1)
-        
-        append_to_log('cluster_refine: '+str(n_merge)+'/'+str(len(df_centers))+' clusters to merge', log_file)
-        
-        #c = df_align['tp'] == 'P'
-        #vec = get_feature_vector(df_align[c][['query_id','database_id','match_score']], d_dct = d_dct)
-        df_align = get_best(df_align, ['query_id'], 'match_score')
-        vec = get_feature_vector(df_align[['query_id','database_id','match_score']], d_dct = d_dct)
-        
-        keep = set(df_centers['id'].astype(str))
-        clst = []
-        for i in range(0,len(mqueue)):
-            mout = mqueue[i]
-            append_to_log('cluster_refine: doing merging on '+str(len(mout))+' clusters, '+str(i)+'/'+str(len(mqueue)), log_file)
-            cout = cluster_recenter(mout, df_q, vec, config = config,
-                                    N_rsamp = N_rsamp, thresh_split = 500,
-                                    center_size = center_size, min_samples = min_samples,
-                                    workspace = workspace, log_file = log_file)
-            if len(cout) > 0:
-                clst.append(cout)
-            keep = keep - set(mout)
-        
-        df_centers = df_centers[df_centers['id'].isin([i for i in keep])]
-        clst.append(df_centers)
-        df_centers = pd.concat(clst)
-        df_centers['id'] = ['cluster'+str(i) for i in range(0,len(df_centers))]
-        
-        # track progress
-        if ofile!= '':
-            ts = ''
-            if timestamp:
-                ts = '_'+datetime.datetime.fromtimestamp(time.time()).strftime('%Y_%m_%d_%H_%M_%S')
-            fname = ofile+'_'+str(k)+ts+'_c'+str(len(df_centers))+'.csv.gz'
-            df_centers.to_csv(fname, index=False, compression='infer')
-        
-    append_to_log('cluster_refine: complete', log_file)
-    return df_centers
-
-def cluster_metric(df_q, df_d, config='-k15 -w10 -p 0.9', 
-                   workspace='./clust_metric/', log_file='log.txt'):
-    '''
-    Outputs some stats on cluster quality and coverage
-    '''
-    # global alignment
-    append_to_log('cluster_metric: getting global alignment on cluster centers', log_file)
-    df = run_minimap2(df_q, df_d, config = config, cigar = True, workspace = workspace, log_file = log_file)
-
-    # bin the cluster boundaries
-    c = df['tp'] == 'P'
-    centers = np.unique(df[c]['database_id'])
-    d_dct = {centers[i]:i for i in range(0,len(centers))}
-    
-    append_to_log('cluster_metric: getting cluster center similarity', log_file)
-    df_vec = get_feature_vector(df[['query_id','database_id','AS']], d_dct = d_dct)
-    cols = df_vec.columns[df_vec.columns!='id']
-    A = df_vec[cols].values
-    cosim = dist_cosine(A.T, A.T)
-    
-    append_to_log('cluster_metric: getting quartiles', log_file)
-    vecP = get_feature_vector(df[c][['query_id','database_id','AS']], d_dct = d_dct)
-    A = vecP[cols].values
-    data = []
-    for i in range(0,len(centers)):
-        v1 = A.T[i]
-        n1 = v1 > 0
-        a = np.percentile(v1[n1], 25)
-        d = cosim[i,:]
-        data.append([centers[i], np.sum(n1), a, np.min(d[d>0])])
-    
-    out = np.concatenate((data, cosim), axis=1)
-    col1 = ['id','n','ci_25','tot_cosim']
-    col2 = ['cosim_'+i for i in centers]
-    out = pd.DataFrame(out, columns = col1 + col2)
-    out = out.merge(df_d[['id','split']], on = 'id', how = 'left')
-    
-    # formating the data types for output
-    for i in col2 + col1[2:]:
-        out[i] = out[i].astype(float)
-    out['id'] = out['id'].astype(str)
-    out['n'] = out['n'].astype(int)
-    return out, vecP, df[df['tp']=='P']
+        ridx = np.random.permutation(len(qry))
+        df_c.append(df_q[df_q['id'].isin(qry[ridx[:rsize]])][['id','sequence']])
+    db = df_c
+    while N > len(df_c):
+        logging.info('cluster_sample: qlen='+str(len(qry))+' progress='+str(len(df_c))+'/'+str(N))
+        # align centers to data and look for unaligned samples
+        seq = df_q[df_q['id'].isin(qry)]
+        out = run_minimap2(seq, db, config=config, cigar=True, workspace=workspace)
+        out = out[out['match_score'] > th]
+        # make the new block to sequence in
+        qry = set(qry) - set(out['query_id'].astype(str)) - set(df_c['id'].astype(str))
+        if len(qry)==0:
+            break
+        # pick random sequence to partition the data
+        qry = np.array([i for i in qry])
+        ridx = np.random.permutation(len(qry))
+        db = df_q[df_q['id'].isin(qry[ridx[:rsize]])][['id','sequence']]
+        df_c = df_c.append(db)
+    df_c['id'] = ['cluster'+str(i) for i in range(0,len(df_c))]
+    return df_c
 
 def insert_to_queue(items, queue):
     items = {i for i in items}
@@ -1414,184 +1274,7 @@ def dist_cosine(v1, v2):
     D = 1 - D
     return D
 
-def dist_jensenshannon(v1, v2 = []):
-    N1 = v1.shape[0]
-    p = []
-    for i in range(0,N1):
-        if i%1000 == 0:
-            print('computing p = ',i,'/',N1)
-        x = v1[i][v1[i]>0]
-        p.append(np.sum(x*np.log(x)))
-    
-    if len(v2)==0:
-        v2 = v1
-        q = p
-        N2 = N1
-        square = True
-    else:
-        q = []
-        N2 = v2.shape[0]
-        for i in range(0,N2):
-            if i%1000 == 0:
-                print('computing q = ',i,'/',N1)
-            x = v2[i][v2[i]>0]
-            q.append(np.sum(x*np.log(x)))
-        square = False
-    
-    out = np.zeros((N1,N2))
-    for i in range(0,N1):
-        js = 0
-        if square:
-            js = i
-        if i%50 == 0:
-            print('computing m = ',i,'/',N1)
-        for j in range(js,N2):
-            m = (v1[i]+v2[j])/2
-            m = m[m>0]
-            out[i,j] = (p[i] + q[j])/2 - np.sum(m*np.log(m))
-            out[j,i] = out[i,j]
-    return out
-
-def cluster_recenter(queue, df_q, df_vec, config='-k15 -w10 -p 0.9',
-                     center_size=20, min_samples=20, N_rsamp=2000, thresh_split=0.9,
-                     workspace='./clust_recenter/', log_file='log.txt'):
-    '''
-    Reclusters some given cluster centers
-    
-    '''
-    # get it via number of sequences closest from the center
-    x = []
-    for col in queue:
-        v = df_vec[['id',col]].values
-        v = v[v[:,1]>0]
-        if thresh_split == 0:
-            s = v
-        else:
-            s = np.argsort(v[:,1])[::-1]
-            v = v[s]
-            s = v[:thresh_split]
-        x.append(s[:,0])
-    qlist = np.unique(np.concatenate((x)))
-    
-    # check if min_samples is satisfied, otherwise its outlier shit
-    if (len(qlist) > min_samples) == False:
-        append_to_log('cluster_recenter: not enough samples to cluster', log_file)
-        return []
-
-    # subsample if its too big to hold square float array in memory
-    append_to_log('clustering '+str(len(qlist))+' sequences', log_file)
-
-    # default sampling
-    mem_limit = N_rsamp
-    if len(qlist) > mem_limit and len(queue) == 1:
-        append_to_log('subsampling because memlimit = '+str(mem_limit)+' sequences reached', log_file)
-        ridx = np.random.permutation(len(qlist))
-        qlist = qlist[ridx[:N_rsamp]]
-    qlist = df_q[df_q['id'].isin(qlist)]
-    
-    # defaults for cluster recentering
-    method = 'pairwise'
-    # sample in more clever way if query is large
-    if len(qlist) > N_rsamp and len(queue) == 1:
-        df_d = cluster_sample(qlist, max_iter = 500, block_thresh = 0.8, N_rsamp = 20,
-                              config = config, workspace = workspace, log_file = log_file)
-        method = 'pairwise'
-    
-    # run clustering
-    df_c, df_clst = cluster_iter_optics(qlist, center_size = center_size, min_samples = min_samples,
-                        config = config, workspace = workspace, log_file = log_file, method = method)
-    if len(df_c) > 0:
-        df_c['split'] = False
-    return df_c
-
-def cluster_iter_optics(qry, center_size=20, min_samples=20,
-                        config ='-k15 -w10 -p 0.9 -D', workspace='./clust_iter_optics/',
-                        log_file='log.txt', method=''):
-    '''
-    Find cluster centers for a set of sequence data
-    qry = dataframe of query sequences to search for cluster centers.
-           Must have at least the following columns:
-           [id, sequence]
-           [id, sequence, quality]
-           [id, sequence, msa_input_file]
-           msa_input_files should be in fasta or fastq format
-           with filename as .fasta, .fa, .fastq, or .fq 
-    df_d = 
-    center_size = number of sequences to take from cluster center for multi-seq alignment
-    min_samples = min_samples parameter for optics
-    workspace = workspace folder for the aligner
-    log_file = log file to record progress
-    '''
-    # make sure names are strings
-    df_q = qry.copy()
-    df_q['id'] = df_q['id'].astype(str)
-    
-    # compute pairwise similarity --> slower but more accurate
-    append_to_log('cluster_optics_iter: computing pairwise distance matrix', log_file)
-    files = get_pairwise_distance(df_q, block=500, output_folder = workspace, workspace = workspace,
-                                  config = config, log_file = log_file, symmetric = True)
-    df = pd.concat([pd.read_csv(f) for f in files])
-    batch_file_remove(files) # clean up the files
-    append_to_log('cluster_optics_iter: getting the distance matrix', log_file)
-    
-    metric = 'match_score'
-    df = get_best(df, ['query_id','database_id'], metric)
-    df = get_feature_vector(df[['query_id','database_id',metric]], symmetric = True)
-    df = get_symmetric_matrix(df, sym_larger = False)
-    y = df[df.columns[df.columns!='id']].values
-    for i in range(0,len(y)):
-        y[i,i] = 1
-    y = pd.DataFrame(1-y, columns = ['d'+str(i) for i in range(0,len(y))])
-    y['id'] = df['id'].values
-    df = y # debug
-    
-    # safety check that we have enough data to cluster
-    if len(df) < min_samples+1:
-        append_to_log('cluster_optics_iter: not enough samples to cluster', log_file)
-        return [], []
-    
-    ofile = 'tsne'
-    # run clustering
-    if method == 'tsne + hdbscan':
-        # dimensional reduction with tsne for large datasets
-        append_to_log('cluster_optics_iter: running tsne', log_file)
-        df = run_TSNE(df, n_comp = 2, metric = 'precomputed', perplexity = min_samples, 
-                      ofile = ofile, verbose = 1)
-        
-        # do importance weighting of the samples
-        if weights:
-            append_to_log('cluster_optics_iter: applying rca weights to samples', log_file)
-            w = df.merge(df_q[['id','N frags']], on = 'id', how = 'left')
-            w = np.ceil(np.log(w['N frags'].values)/np.log(3))
-            df = cluster_weighting(df, w)
-        
-        # do clustering
-        if method == 'tsne + hdbscan':
-            df_clst = cluster_HDBSCAN(df, metric = 'euclidean', min_cluster_size = min_samples,
-                                      min_samples = min_samples*2, log_file = log_file)
-        df_clst = df_clst[['id','cluster_id']].drop_duplicates()
-    else:
-        # do optics on raw data
-        append_to_log('cluster_optics_iter: running optics', log_file)
-        df_clst = cluster_OPTICS(df, metric='precomputed', alt_label = True, log_file=log_file)
-
-    # get cluster centers
-    if np.max(df_clst['cluster_id']) == -1:
-        append_to_log('No clusters found', log_file)
-        return [], df_clst
-    else:
-        append_to_log('Getting cluster centers', log_file)
-        din = []
-        df_clst = df_clst.merge(df_q, on='id', how = 'left')
-        for i in range(0, np.max(df_clst['cluster_id'])+1):
-            c = df_clst['cluster_id'] == i
-            din.append(df_clst[c].iloc[:center_size])
-        din = pd.concat(din)
-        # compute the center sequence
-        df_centers = cluster_spoa_merge(din, workspace = workspace, log_file = log_file)
-        return df_centers, df_clst
-
-def cluster_weighting(df, weight):
+def add_sample_weight(df, weight):
     '''
     Adds more weight to sample datapoint by adding samples
     df = pandas dataframe containing at least the columns ['id']
@@ -1604,13 +1287,12 @@ def cluster_weighting(df, weight):
     out = pd.DataFrame(out, columns = ['id'])
     return out.merge(df, on = 'id', how = 'left')
 
-def cluster_hierarchical(df, metric='precomputed', linkage='single', thresh=0.5, 
-                         log_file='log.txt', n_clusters=None):
+def cluster_hierarchical(df, metric='precomputed', linkage='single', thresh=0.5, n_clusters=None):
     '''
     Perform hierarchical clustering on a distance matrix
     '''
     # running the clustering
-    append_to_log('Running hierarchical clustering', log_file)
+    logging.info('Running hierarchical clustering')
 
     # initialize settings
     clust = sklearn.cluster.AgglomerativeClustering(n_clusters = n_clusters, distance_threshold = thresh,
@@ -1620,13 +1302,11 @@ def cluster_hierarchical(df, metric='precomputed', linkage='single', thresh=0.5,
     
     L = clust.labels_
     for i in np.unique(L):
-        n = np.sum(L==i)
-        if n == 1:
+        if np.sum(L==i) == 1:
             L[L==i] = -1 # set cluster size = 1 as outliers
     return pd.DataFrame(np.transpose([df['id'].values, L]), columns = ['id','cluster_id'])
 
-def cluster_HDBSCAN(df, metric='euclidean', min_cluster_size=100, min_samples=None,
-                    log_file='log.txt', n_jobs=4):
+def cluster_HDBSCAN(df, metric='euclidean', min_cluster_size=100, min_samples=None, n_jobs=4):
     '''
     Do clustering with HDBSCAN
     df = data frame containing columns [id, d_i..., d_n]
@@ -1634,24 +1314,23 @@ def cluster_HDBSCAN(df, metric='euclidean', min_cluster_size=100, min_samples=No
     min_samples = min_sample parameter to hdbscan
     min_cluster_size = min_cluster_size parameter to hdbscan
     n_jobs = number of parallel processes to run if supported by algorithm, -1 means use all processors
-    log_file = file to log steps of the algorithm
     '''
     # initialize the 
     clust = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples,
                             core_dist_n_jobs=n_jobs, metric=metric)
     
-    append_to_log('Running HDBSCAN', log_file)
+    logging.info('Running HDBSCAN')
     cols = df.columns[df.columns!='id'] # get only non read id values
     clust.fit(df[cols].values)
     
-    append_to_log('getting and ordering the results', log_file)
+    logging.info('getting and ordering the results')
     outlier = clust.outlier_scores_
     prob = clust.probabilities_
     labels = clust.labels_
     r_id = df['id'].values
     
-    append_to_log('number of clusters = '+str(np.max(labels)+1), log_file)
-    append_to_log('unclustered = '+str(np.sum(labels==-1)), log_file)
+    logging.info('number of clusters = '+str(np.max(labels)+1))
+    logging.info('unclustered = '+str(np.sum(labels==-1)))
     
     s = np.lexsort((outlier, labels))
     df = np.transpose([r_id[s], labels[s], range(0,len(r_id)), prob[s], outlier[s]])
@@ -1663,8 +1342,7 @@ def cluster_HDBSCAN(df, metric='euclidean', min_cluster_size=100, min_samples=No
     return df
 
 def cluster_OPTICS(df, metric='euclidean', min_samples=None, min_cluster_size=None, xi=0.05,
-                   max_eps=None, cluster_method='dbscan', n_jobs=None, alt_label=False,
-                   log_file='log.txt'):
+                   max_eps=None, cluster_method='dbscan', n_jobs=None, alt_label=False):
     '''
     Function to perform optics via sklearn library implementation
     df = data frame containing columns [id, d_i..., d_n]    
@@ -1678,15 +1356,23 @@ def cluster_OPTICS(df, metric='euclidean', min_samples=None, min_cluster_size=No
               smaller value results in faster run time at the cost of accuracy
     alt_label = use custom reachability plot labeling scheme that is not in sklearn
     n_jobs = number of parallel processes to run
-    log_file = file to log steps of the algorithm
     '''
     # running the clustering
-    append_to_log('Running OPTICS', log_file)
+    logging.info('Running OPTICS')
+
+    # Safety check on number of samples given
+    if len(df) < 3:
+        logging.warning('Sample size too small to use with OPTICS')
+        df['cluster_id'] = range(0,len(df))
+        df['ordering'] = range(0,len(df))
+        df['reachability'] = -1
+        return df[['id','cluster_id','ordering','reachability']]
+
     cols = df.columns[df.columns!='id'] # get only non read id values
     if max_eps == None:
         z = np.abs(df[cols].values)
         max_eps = (np.max(z)+np.min(z))/2
-    append_to_log('max_eps = '+str(max_eps), log_file)
+    logging.info('max_eps = '+str(max_eps))
     
     # do optimization on min_samples to get clustering with the least outliers
     if min_samples == None or min_samples > len(df):
@@ -1706,21 +1392,21 @@ def cluster_OPTICS(df, metric='euclidean', min_samples=None, min_cluster_size=No
     delta = min_samples/2
     for i in range(0, max_iter):
         min_samples = int(min_samples)
-        append_to_log('clust_OPTICS: iter='+str(i)+' using min_samples='+str(min_samples), log_file)
+        logging.info('clust_OPTICS: iter='+str(i)+' using min_samples='+str(min_samples))
         clust = sklearn.cluster.OPTICS(min_samples=min_samples, min_cluster_size=min_cluster_size, xi=xi,
                             max_eps=max_eps, cluster_method=cluster_method, metric=metric, n_jobs=n_jobs)
         clust.fit(df[cols].values)
         # check labels for cluster number and coverage
         nout = np.sum(clust.labels_ == -1)
         nclust = np.max(clust.labels_)+1
-        append_to_log('clust_OPTICS: clusters='+str(nclust)+' outliers='+str(nout)+' delta='+str(delta), log_file)
+        logging.info('clust_OPTICS: clusters='+str(nclust)+' outliers='+str(nout)+' delta='+str(delta))
         # always keep the change if we get more clusters
         if nclust > prev_nclust or (nclust == prev_nclust and nout <= prev_nout):
             tmp = min_samples
             delta = int((prev_min - min_samples)/2)
             min_samples-= delta
         # if cluster number goes down as we increase min_samples
-        if nclust < prev_nclust:
+        elif nclust < prev_nclust:
             tmp = min_samples
             delta = int((prev_min + min_samples)/2) - min_samples
             min_samples = prev_min + delta
@@ -1732,7 +1418,7 @@ def cluster_OPTICS(df, metric='euclidean', min_samples=None, min_cluster_size=No
                 best_nclust = nclust
                 best_nout = nout
         # if shift in min_samples is zero, exit loop
-        if delta==0 or min_samples <= 2:
+        if delta==0 or min_samples <= 2 or nout==0:
             break
         prev_nclust = nclust
         prev_nout = nout
@@ -1751,12 +1437,12 @@ def cluster_OPTICS(df, metric='euclidean', min_samples=None, min_cluster_size=No
     
     if np.min(reach) >= 0:
         # using custom relabeling on the reachability plot
-        if alt_label:
-            append_to_log('using alt labeling', log_file)
+        if alt_label and len(reach) > 5:
+            logging.info('using alt labeling')
             labels = reachability_alt_label(reach)
-        append_to_log('n_clusters='+str(np.max(labels)+1)+' n_unclustered='+str(np.sum(labels==-1))+' N='+str(len(df)), log_file)
+        logging.info('n_clusters='+str(np.max(labels)+1)+' n_unclustered='+str(np.sum(labels==-1))+' N='+str(len(df)))
     else:
-        append_to_log('clust_OPTICS: reachability < 0, please change the min_samples parameter you are using')
+        logging.info('clust_OPTICS: reachability < 0, please change the min_samples parameter you are using')
     
     # format and return the data
     df = np.transpose([r_id, labels, range(0,len(r_id)), reach])
@@ -1817,12 +1503,12 @@ def reachability_alt_label(reach):
         k+=1
     return labels
 
-def cluster_Kmeans(df, n_clusters, n_init=10, n_iter=100, log_file='log.txt'):
+def cluster_Kmeans(df, n_clusters, n_init=10, n_iter=100):
     '''
     Function to perform clustering via k means algorithm
     '''
     # running the clustering
-    append_to_log('Running kmeans with n_clusters = '+str(n_clusters), log_file)
+    logging.info('Running kmeans with n_clusters = '+str(n_clusters))
     cols = df.columns[df.columns!='id'] # get only non read id values
     x = df[cols.values]
     
@@ -1830,7 +1516,7 @@ def cluster_Kmeans(df, n_clusters, n_init=10, n_iter=100, log_file='log.txt'):
     clust = sklearn.cluster.MiniBatchKMeans(n_clusters = n_clusters, n_init = n_init, max_iter = n_iter)
     clust.fit(x)
     
-    append_to_log('Getting results', log_file)
+    logging.info('Getting results')
     labels = clust.labels_
     inertia = clust.inertia_
     centers = clust.cluster_centers_
@@ -1849,8 +1535,7 @@ def cluster_Kmeans(df, n_clusters, n_init=10, n_iter=100, log_file='log.txt'):
     df['ordering'] = df['ordering'].astype(int)
     return df
 
-def cluster_spoa_merge(df, config = '-n -15 -g -10 -l 0 -r 2', workspace = './clust_spoa_merge/',
-                       batch_size = 100, cleanup = True, log_file = 'log.txt'):
+def cluster_spoa_merge(df, config='-l 0 -r 2', workspace='./clust_spoa_merge/', batch_size=100, cleanup=True):
     '''
     Function to return list of cluster centers via multi-sequence alignment
     df = dataframe of query sequences to search for cluster centers.
@@ -1866,7 +1551,7 @@ def cluster_spoa_merge(df, config = '-n -15 -g -10 -l 0 -r 2', workspace = './cl
     cleanup = delete workspace folder after the run
     '''
     # make directory if it does not exist
-    check_dir(workspace)
+    workspace = check_dir(workspace)
     files = glob.glob(workspace+'*')
     batch_file_remove(files)
     
@@ -1880,12 +1565,12 @@ def cluster_spoa_merge(df, config = '-n -15 -g -10 -l 0 -r 2', workspace = './cl
         df_fa = []
         df_fq = []
         for i in range(0, len(df)):
-            [r_id, c_id, file] = df.values[i]
-            ftype = file.split('.')
+            [r_id, c_id, fname] = df.values[i]
+            ftype = fname.split('.')
             if 'fa' in ftype or 'fasta' in ftype:
-                df_fa.append(read_fasta(file))
+                df_fa.append(read_fasta(fname))
             elif 'fq' in ftype or 'fastq' in ftype:
-                df_fq.append(read_fastq(file))
+                df_fq.append(read_fastq(fname))
 
             # write file if boundary of new cluster found
             if i+1 >= len(df) or c_id!= df.values[i+1, 1]:
@@ -1941,10 +1626,10 @@ def cluster_spoa_merge(df, config = '-n -15 -g -10 -l 0 -r 2', workspace = './cl
     N_chunks = np.ceil(len(MSA_infile)/batch_size)
     for i, infile in enumerate(np.array_split(MSA_infile, N_chunks)):
         run_msa(infile, 'spoa', config)
-        append_to_log('cluster_spoa_merge: spoa on '+str(i)+'/'+str(N_chunks), log_file)
+        logging.info('cluster_spoa_merge: spoa on '+str(i)+'/'+str(N_chunks))
     
     # get consensus
-    append_to_log('cluster_spoa_merge: reading consensus', log_file)
+    logging.info('cluster_spoa_merge: reading consensus')
     MSA_outfile = [i+'.out' for i in MSA_infile]
     data = []
     for i in range(0,len(MSA_outfile)):

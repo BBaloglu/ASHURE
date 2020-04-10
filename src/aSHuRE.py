@@ -12,43 +12,37 @@ import subprocess
 import os
 import time
 import sys
+import logging
+import argparse
+import json
 
 # Loading the custom libraries
 import bilge_pype as bpy
 
 #########################################################################################################
 
-def generate_pseudo_refdb(primers, reads, block = 10000, f_sizes = '[[500,1000]]',
-                          workspace = './pseudo_refdb/', config = '-k5 -w1 --score-N 0 -s 20 -P',
-                          log_file = 'log.txt'):
+def generate_pseudo_refdb(primers, reads, block=10000, fs='500-1000', workspace='./pseudo_refdb/', config='-x map-ont'):
     '''
     Build reference database using paired end search of some primer sequences in the uncorrected reads
     primers   = dataframe containing primer information with columns:
                 [fwd_id, fwd_seq, rev_id, rev_seq]
     reads     = dataframe containing read information with columns:
                 [id, sequence] or [id, sequence, quality]
-    
     block     = block size of reads to work on each time. This is for saving on RAM.
-
+    fs        = size range of fastq reads to search primers
     workspace = workspace for the aligner
     config    = configs to pass to minimap2 aligner
-    pseudodb_file = csv file to save pseudo reference database
-    log_file  = where to log progress
-    
-    returns location of pseudodb_file
+    returns dataframe of pseudo reference sequences with columns
     '''
     def parse_fsize(text):
-        text = text.split('[[')[1].split(']]')[0].split('],[')
-        data = []
-        for i in text:
-            data.append(i.split(','))
+        data = [i.split('-') for i in text.split(',')]
         return np.array(data).astype(int)
 
     def split_sequence(df):
         '''
         Function to get sequence info for each frag
         df = pandas dataframe with columns:
-             [id, orientation, start, end, sequence, quality, fs_lower, fs_upper]
+             [id, orientation, start, end, sequence, quality]
         '''
         data = []
         for r_id, ot, t1, t2, seq, qual in df.values:
@@ -58,22 +52,22 @@ def generate_pseudo_refdb(primers, reads, block = 10000, f_sizes = '[[500,1000]]
                 seq = bpy.dna_revcomp(seq)
                 qual = qual[::-1]
             data.append([r_id+'_rs'+str(t1)+'_'+str(t2), seq, qual])
-        return pd.DataFrame(data, columns = ['id', 'sequence', 'quality'])
+        return pd.DataFrame(data, columns=['id', 'sequence', 'quality'])
 
+    workspace = bpy.check_dir(workspace)
     # look for the primers
     data = []
-    for s1,s2 in parse_fsize(f_sizes):
+    for s1,s2 in parse_fsize(fs):
         # filter for some read sizes to reduce search time
-        s = (reads['length'] > s1)&(reads['length'] < s2)
+        s = (reads['length'] > s1) & (reads['length'] < s2)
         # chunk up the query so we can see progress
         N_chunks = np.ceil(len(reads[s])/block)
         for i, df_i in enumerate(np.array_split(reads[s], N_chunks)):
-            bpy.append_to_log('Working on '+str(i)+'/'+str(N_chunks)+' block size = '+str(block)+
-                              ' read size = '+str(s1)+' to '+str(s2)+' bp', log_file)
-            data.append(match_primer_to_read(primers, df_i, workspace = workspace, log_file = log_file))
+            logging.info('Working on '+str(i)+'/'+str(N_chunks)+' block size='+str(block)+' read size='+str(s1)+' to '+str(s2)+' bp')
+            data.append(match_primer_to_read(primers, df_i, workspace=workspace, config=config))
 
     if len(data)==0:
-        bpy.append_to_log('generate_pseudo_refdb: no primers found in reads. Exiting.', log_file)
+        logging.error('generate_pseudo_refdb: no primers found in reads.')
         sys.exit(1)
     data = pd.concat(data)
     
@@ -87,42 +81,39 @@ def generate_pseudo_refdb(primers, reads, block = 10000, f_sizes = '[[500,1000]]
             x.append([i[0], i[1], i[2], i[5]])
         else:
             x.append([i[0], i[1], i[4], i[3]])
-    data = pd.DataFrame(x, columns = ['id','orientation','start','end'])
+    data = pd.DataFrame(x, columns=['id','orientation','start','end'])
 
     # merge and get pseudo reference sequences
+    reads = bpy.add_seq(reads[reads['id'].isin(data['id'])]) # low mem optimization
     data = data.merge(reads[['id','sequence','quality']], on = 'id', how = 'left')
     df_d = split_sequence(data[['id','orientation','start','end','sequence','quality']]).drop_duplicates()
-    bpy.append_to_log('Reference sequences found '+str(len(df_d)), log_file)
+    logging.info('Reference sequences found '+str(len(df_d)))
     return df_d
     
-def find_RCA_frags(ref, reads, block = 10000, folder = './frags/', config = '-k10 -w1', log_file = 'log.txt'):
+def find_RCA_frags(ref, reads, block=10000, output='./frags/', config=''):
     '''
     Function to search sequencing primers and identify RCA reads from fastq info
-    ref            = similarily related sequences to search repeated RCA frags with columns = [<id>,<sequence>]
+    ref            = similarily related sequences to search repeated RCA frags with columns [id, sequence]
     reads          = fastq info
     block          = number of fastq reads to process each time
-    folder         = where to save data
+    output         = output where data is saved
     '''
-    aligner_folder = folder+'aligner/'
+    output = bpy.check_dir(output)
+    workspace = output+'aligner'
 
     N_chunks = np.ceil(len(reads)/block)
     build_index = True
     for i, reads in enumerate(np.array_split(reads, N_chunks)):
-        bpy.append_to_log('Working on '+str(i)+'/'+str(N_chunks)+' block size = '+str(block), log_file)
-        # Find frag via minimap2
-        frags = bpy.run_minimap2(reads[['id','sequence','quality']], ref,
-                                 workspace = aligner_folder, config = config, cigar = True,
-                                 build_index = build_index, use_index = True)
+        logging.info('Working on '+str(i)+'/'+str(N_chunks)+' block size='+str(block))
+        frags = bpy.run_minimap2(reads, ref, workspace=workspace, config=config, cigar=True, build_index=build_index, use_index=True)
         build_index = False
-        # Save the info
-        bpy.append_to_log('Saving information', log_file)
-        frags.to_csv(folder+'fraginfo_'+str(i)+'.csv.gz', index=False, compression='infer')
-        bpy.append_to_log('frags found in this block = '+str(len(frags)), log_file)
-        
+        logging.info('Saving information')
+        frags.to_csv(output+'fraginfo_'+str(i)+'.csv.gz', index=False, compression='infer')
+        logging.info('frags found in this block = '+str(len(frags)))
     # clear the work folder
-    subprocess.run(['rm','-r',aligner_folder]) # remove the aligner folder after work is done
+    subprocess.run(['rm','-r',workspace]) # remove the aligner folder after work is done
 
-def annotate_reads(df, log_file = 'log.txt'):
+def annotate_reads(df):
     '''
     Annotates some information about each read
     
@@ -153,8 +144,7 @@ def annotate_reads(df, log_file = 'log.txt'):
     
     '''
     df = df.sort_values(by = ['query_id','q_start']) # check if sorting on numpy array will be faster
-    data = df[['query_id','q_len','q_start','q_end',
-               't_len','t_start','t_end','orientation','AS','match_score']].values
+    data = df[['query_id','q_len','q_start','q_end','t_len','t_start','t_end','orientation','AS','match_score']].values
     
     # storage variables
     df_1D = []
@@ -215,10 +205,8 @@ def annotate_reads(df, log_file = 'log.txt'):
             AS = []
 
     # format data
-    df_frag = pd.DataFrame(df_frag, columns = ['query_id','N frags','1D2','q_len','q_unmapped',
-                                            'db_fwd_cover','db_rev_cover',
-                                            'match_size','avg_match','avg_AS','std_AS'])
-    df_1D = pd.DataFrame(df_1D, columns = ['query_id','f_start','f_end'])
+    df_frag = pd.DataFrame(df_frag, columns=['query_id','N frags','1D2','q_len','q_unmapped','db_fwd_cover','db_rev_cover','match_size','avg_match','avg_AS','std_AS'])
+    df_1D = pd.DataFrame(df_1D, columns=['query_id','f_start','f_end'])
     
     # save the info
     df_1D.to_csv('df_1D.csv.gz', index = False, compression = 'infer')
@@ -226,8 +214,7 @@ def annotate_reads(df, log_file = 'log.txt'):
 
     return df_frag
 
-def perform_spoa_MSA(df, frags, batch_size=100, folder = './msa/',
-                     thread_lock = True, config = '-l 0 -r 2', log_file = 'log.txt'):
+def perform_MSA(df, frags, batch_size=100, folder='./msa/', thread_lock=True, config='-l 0 -r 2'):
     '''
     This function performs multisequence alignment on RCA reads
     df     = dataframe containing the original read fastq information
@@ -235,73 +222,79 @@ def perform_spoa_MSA(df, frags, batch_size=100, folder = './msa/',
     output = folder containing file of aligned RCA reads
     '''
     # make workspace folder if it does not exist
-    bpy.check_dir(folder)
+    folder = bpy.check_dir(folder)
     # clear out the folder if anything is in it
     files = glob.glob(folder+'*')
     bpy.batch_file_remove(files)
     
-    # merge the input data
-    data = frags[['query_id','q_len','q_start','q_end','orientation']]
-    data = data.rename(columns={'query_id':'id'})
-    data = data.merge(df[['id','sequence','quality']], on = 'id', how = 'left')
-    data = data.sort_values(by=['id','q_start']).values
-
-    bpy.append_to_log('Writing frags to fastq files', log_file)
-    MSA_infile = []
-    seqlist = []
-    k = 0
-    for i in range(0,len(data)):
-        # for first entries, set s1 = 0
-        if i==0 or data[i,0]!=data[i-1,0]:
-            s1 = 0
-            s2 = int((data[i,3]+data[i+1,2])/2)
-        # last entry reached, s2 to end of read
-        elif i+1 >= len(data) or data[i,0]!=data[i+1,0]:
-            s1 = int((data[i,2]+data[i-1,3])/2)
-            s2 = data[i,1]
-        else:
-            s1 = int((data[i,2]+data[i-1,3])/2)
-            s2 = int((data[i,3]+data[i+1,2])/2)
-        
-        # check that averaging did not create weird boundaries
-        if s2 - s1 > 10:
-            # slice out the sequences
-            seq = data[i,5][s1:s2]
-            q = data[i,6][s1:s2]
-
-            # in case we have reverse sequences
-            if data[i,4] == '-': 
-                seq = bpy.dna_revcomp(seq)
-                q = q[::-1]
-
-            # record it
-            seqlist.append([data[i,0]+'_frag'+str(k)+'_start'+str(s1)+'_end'+str(s2), seq, q])
-        k+=1
-
-        # end of list or end of read reached
-        if i+1 >= len(data) or data[i,0]!=data[i+1,0]:
-            if len(seqlist) > 1:
-                fname = folder + data[i,0] + '_Nfrags'+str(len(seqlist))+'.fq'
-                bpy.write_fastq(fname, np.array(seqlist))
-                MSA_infile.append(fname)
-            # reset the variables
-            seqlist = []
-            k = 0
-        
-        # submit to spoa every 100 files or whatever batch_size is
-        if (len(MSA_infile) >= batch_size or i+1 >= len(data)) and len(MSA_infile) > 0:
-            bpy.append_to_log('MSA progress = '+str(i)+'/'+str(len(data)), log_file)
-            upy.run_msa(MSA_infile, aligner = 'spoa', config = config, thread_lock = thread_lock)
-            MSA_infile = []
+    # batch submit the jobs
+    frags = frags.rename(columns={'query_id':'id'})
+    if 'filename' in df.columns:
+        rlist = df[df['id'].isin(frags['id'])].sort_values(by=['filename'])['id'].drop_duplicates().values
+    else:
+        rlist = np.unique(frags['id'])
+    N_chunks = np.ceil(len(rlist)/batch_size)
+    for j, rid in enumerate(np.array_split(rlist, N_chunks)):
+        # merge the input data
+        data = frags[frags['id'].isin(rid)][['id','q_len','q_start','q_end','orientation']]
+        # check if we are doing low_mem
+        reads = bpy.add_seq(df[df['id'].isin(rid)])
+        data = data.merge(reads[['id','sequence','quality']], on='id', how='left')
+        data = data.sort_values(by=['id','q_start']).values
+        logging.info('Writing frags to fastq files')
+        MSA_infile = []
+        seqlist = []
+        k = 0
+        for i in range(0,len(data)):
+            # for first entries, set s1 = 0
+            if i==0 or data[i,0]!=data[i-1,0]:
+                s1 = 0
+                s2 = int((data[i,3]+data[i+1,2])/2)
+            # last entry reached, s2 to end of read
+            elif i+1 >= len(data) or data[i,0]!=data[i+1,0]:
+                s1 = int((data[i,2]+data[i-1,3])/2)
+                s2 = data[i,1]
+            else:
+                s1 = int((data[i,2]+data[i-1,3])/2)
+                s2 = int((data[i,3]+data[i+1,2])/2)
             
-def get_spoa_consensus(MSA_outfile, log_file = 'log.txt'):
+            # check that averaging did not create weird boundaries
+            if s2 - s1 > 10:
+                # slice out the sequences
+                seq = data[i,5][s1:s2]
+                q = data[i,6][s1:s2]
+                # in case we have reverse sequences
+                if data[i,4] == '-': 
+                    seq = bpy.dna_revcomp(seq)
+                    q = q[::-1]
+                # record it
+                seqlist.append([data[i,0]+'_frag'+str(k)+'_start'+str(s1)+'_end'+str(s2), seq, q])
+            k+=1
+
+            # end of list or end of read reached
+            if i+1 >= len(data) or data[i,0]!=data[i+1,0]:
+                if len(seqlist) > 1:
+                    fname = folder + data[i,0] + '_Nfrags'+str(len(seqlist))+'.fq'
+                    bpy.write_fastq(fname, np.array(seqlist))
+                    MSA_infile.append(fname)
+                # reset the variables
+                seqlist = []
+                k = 0
+            
+        # submit to spoa every 100 files or whatever batch_size is
+        if len(MSA_infile) > 0:
+            logging.info('MSA progress = '+str(j)+'/'+str(N_chunks))
+            bpy.run_msa(MSA_infile, aligner='spoa', config=config, thread_lock=thread_lock)
+            MSA_infile = []
+ 
+def get_spoa_consensus(MSA_outfile):
     '''
     Reads spoa outfile for the consensus from multi-sequence alignment
     MSA_outfile = multi-sequence alignment output from spoa
 
     output = consensus sequence information
     '''
-    bpy.append_to_log('Reading consensus info from spoa output files', log_file)
+    logging.info('Reading consensus info from spoa output files')
     data = []
     for i in range(0,len(MSA_outfile)):
         fname = MSA_outfile[i]
@@ -311,16 +304,14 @@ def get_spoa_consensus(MSA_outfile, log_file = 'log.txt'):
         rcaID = fname.split('/')[-1].split('_Nfrags')[0]
         nfrags = int(fname.split('/')[-1].split('_Nfrags')[1].split('.')[0])
         if len(text) < 2:
-            bpy.append_to_log('file read error on '+fname, log_file)
+            logging.info('file read error on '+fname)
         else:
             data.append([rcaID, fname.split('.out')[0], nfrags, text[1]])
         if i%20000 == 0:
-            bpy.append_to_log('Consensus progress = '+str(i)+'/'+str(len(MSA_outfile)), log_file)
+            logging.info('Consensus progress = '+str(i)+'/'+str(len(MSA_outfile)))
     return pd.DataFrame(data, columns=['id','msa_input_file','N frags','consensus'])
 
-def match_primer_to_read(primers, reads, thresh = 10,
-                         config = '-k5 -w1 --score-N 0 -s 20 -P', workspace = './match_pmr_to_rd/',
-                         compact = True, verbose = True, log_file = 'log.txt'):
+def match_primer_to_read(primers, reads, thresh=10, config='-x map-ont', workspace='./match_pmr_to_rd/', compact=True, verbose=True):
     '''
     Takes a list of primer pairs and reads and matches primer pairs to the reads
     primers   = pandas dataframe with columns = [fwd_id, fwd_sequence, rev_id, rev_sequence]
@@ -330,41 +321,40 @@ def match_primer_to_read(primers, reads, thresh = 10,
     output    = pandas dataframe with primer mapping info and sequence id as the first column
     '''
     # search for forward primers
-    bpy.append_to_log('searching forward primers', log_file)
+    logging.info('searching forward primers')
     database = primers.rename(columns={'fwd_id':'id','fwd_seq':'sequence'})
     df1 = bpy.run_minimap2(reads, database[['id','sequence']], workspace, config,
                            build_index = True, use_index = True)
     # search for reverse primers
-    bpy.append_to_log('searching reverse primers', log_file)
+    logging.info('searching reverse primers')
     database = primers.rename(columns={'rev_id':'id','rev_seq':'sequence'})
     df2 = bpy.run_minimap2(reads, database[['id','sequence']], workspace, config,
                            build_index = True, use_index = True)
-    
     # remove the working directory
     subprocess.run(['rm','-r',workspace])
 
     # merge the primers that were found
     if len(df1) == 0 and len(df2)==0:
-        bpy.append_to_log('warning no fwd and rev primers found', log_file)
+        logging.info('warning no fwd and rev primers found')
         return []
     elif len(df1) == 0:
-        bpy.append_to_log('warning no fwd primers found', log_file)
+        logging.info('warning no fwd primers found')
         df2['pdir'] = 'fwd'
         df = df2
     elif len(df2) == 0:
-        bpy.append_to_log('warning no rev primers found', log_file)
+        logging.info('warning no rev primers found')
         df1['pdir'] = 'rev'
         df = df1
     else:
-        bpy.append_to_log('fwd and rev primers found', log_file)
+        logging.info('fwd and rev primers found')
         df1['pdir'] = 'fwd'
         df2['pdir'] = 'rev'
         df = pd.concat([df1,df2]) # concatenate
   
     # finding best matches
-    df = bpy.remove_overlaps(df, 'AS', thresh, log_file)
+    df = bpy.remove_overlaps(df, 'AS', thresh)
     
-    bpy.append_to_log('finding best primer match for each read', log_file)
+    logging.info('finding best primer match for each read')
     # do a sort by query and position of the primers
     df = df.sort_values(by=['query_id','q_start']).reset_index(drop=True)
     data = df[['query_id','database_id','pdir','orientation',
@@ -471,7 +461,7 @@ def match_primer_to_read(primers, reads, thresh = 10,
         df = pd.concat(tmp)
         tmp = []
     else:
-        bpy.append_to_log('warning no primers found', log_file)
+        logging.warning('warning no primers found')
         return []
     
     cols = ['fwd_query_id','rev_query_id','fwd_pdir','rev_pdir']
@@ -486,16 +476,16 @@ def match_primer_to_read(primers, reads, thresh = 10,
                      'rev_match','rev_tot','rev_AS','rev_CIGAR']
         df = df[cols]
     
-    # print some info about primer matching
+    # some info about primer matching
     if verbose:
-        bpy.append_to_log(str(len(df_f1))+'/'+str(len(reads))+' reads with fwd and rev primer', log_file)
-        bpy.append_to_log(str(len(df_f2))+'/'+str(len(reads))+' reads with only fwd primer found', log_file)
-        bpy.append_to_log(str(len(df_r3))+'/'+str(len(reads))+' reads with only rev primer found', log_file)
-        bpy.append_to_log(str(len(reads) - len(df_f1) - len(df_f2) - len(df_r3))+'/'+str(len(reads))+
-                                ' reads with no primer matches', log_file)
+        logging.info(str(len(df_f1))+'/'+str(len(reads))+' reads with fwd and rev primer')
+        logging.info(str(len(df_f2))+'/'+str(len(reads))+' reads with only fwd primer found')
+        logging.info(str(len(df_r3))+'/'+str(len(reads))+' reads with only rev primer found')
+        logging.info(str(len(reads) - len(df_f1) - len(df_f2) - len(df_r3))+'/'+str(len(reads))+
+                                ' reads with no primer matches')
     return df
 
-def trim_consensus(df_pmatch, df_cons, log_file = 'log.txt'):
+def trim_consensus(df_pmatch, df_cons):
     '''
     This function trims the primers off the consensus reads
 
@@ -565,417 +555,550 @@ def trim_consensus(df_pmatch, df_cons, log_file = 'log.txt'):
     if len(seq) > 10:
         out.append([df[i,0], '', seq, rev_pmr])
     
-    df = pd.DataFrame(out, columns = ['id','fwd_primer_seq','consensus','rev_primer_seq'])
+    df = pd.DataFrame(out, columns=['id','fwd_primer_seq','consensus','rev_primer_seq'])
     return df.merge(df_cons[['id','N frags','msa_input_file']])
     #return df.merge(df_cons[['id','N frags']])
 
-def clust_pseudoref(df_d, pw_config = '-k15 -w10 -p 0.9 -D', msa_config = '-n -15 -g -10 -l 0 -r 2',
-                    metric = 'match_score', linkage = 'complete', thresh = 0.7,
-                    workspace = './clust_pseudoref/', pw_output = './pw_out/', log_file = 'log.txt'):
+def perform_cluster(df_q, df_d=[], max_iter=1, csize=20, N=2000, th_s=0.9, th_m=0.5, pw_config='', msa_config='', workspace='./cluster/',
+                    ofile='', timestamp=True):
     '''
-    Do hierarchical clustering on pseudoreference sequences to reduce search time
-    thresh = linkage threshold to cluster. If thresh > 1, this becomes n_clusters.
+    Refines the cluster centers for a set of sequence data
+    df_q = dataframe of query sequences to search for cluster centers.
+    df_d = dataframe of cluster centers with you want to append to
+           df_q and df_d must both have at least columns [id, sequence]
+    csize = number of sequences from cluster center to use for recomputation of cluster center sequence
+    max_iter = max iterations to run
+    th_s = threshold accuracy of the lower quartile that triggers recomputation of the cluster center
+    th_m = number of sequences near cluster center to take for merge recomputation
+    N = size of the random sample to compute pairwise distance data with
+    workspace = workspace folder for the aligner
     '''
-    # get pairwise distance info
-    files = bpy.get_pairwise_distance(df_d, block = 500, output_folder = pw_output, workspace = workspace,
-                                  config = pw_config, symmetric = True)
-    pw = []
-    for f in files:
-        pw.append(pd.read_csv(f))
-    subprocess.call(['rm','-r',pw_output])
-    pw = pd.concat(pw).reset_index()
+    def eval(df_q, df_c, pw_config, workspace, best=True):
+        df_align = bpy.run_minimap2(df_q, df_c, config=pw_config, cigar=True, workspace=workspace)
+        if best:
+            df_align = bpy.get_best(df_align, col=['query_id'], metric='match_score', stat='idxmax')
+        cols = np.unique(df_align['database_id'])
+        df_c = df_c[df_c['id'].isin(cols)]
+        logging.info('perform_cluster: number of clusters = '+str(len(df_c)))
+        return df_c, df_align
 
-    # get cosimilarity matrix
-    pw = bpy.get_best(pw, ['query_id','database_id'], metric)
-    dct = np.unique(df_d['id'])
-    dct = {dct[i]:i for i in range(0,len(dct))}
-    pw = bpy.get_feature_vector(pw[['query_id','database_id',metric]], d_dct = dct, q_dct = dct)
-    pw = bpy.get_symmetric_matrix(pw, sym_larger = False)
-    # add back diagonal values if -D was used in config
-    y = pw[pw.columns[pw.columns!='id']].values
-    for i in range(0,len(y)):
-        y[i,i] = 1
-    y = bpy.dist_cosine(y,y)
-    y = pd.DataFrame(y, columns = ['d'+str(i) for i in range(0,len(y))])
-    y['id'] = pw['id'].values
-
-    # do clustering
-    if thresh > 1:
-        df_cl = bpy.cluster_hierarchical(y, metric = 'precomputed', linkage = linkage,
-                                         thresh = None, n_clusters = thresh)
+    # initialize cluster centers
+    if len(df_d) > 0:
+        df_c = df_d
     else:
-        df_cl = bpy.cluster_hierarchical(y, metric = 'precomputed', linkage = linkage,
-                                         thresh = thresh, n_clusters = None)
-    # compress via multi-seq alignment
-    N_cl = len(np.unique(df_cl['cluster_id']))-1
-    N_uc = np.sum(df_cl['cluster_id']==-1)
-    tot = N_cl + N_uc
-    bpy.append_to_log('clustered = '+str(N_cl)+' unclustered='+str(N_uc)+
-                      ' total_seq='+str(len(df_cl))+' thresh='+str(thresh),log_file)
+        df_c = bpy.cluster_sample(df_q, N=20, th=0.8, rsize=1, config=pw_config, workspace=workspace)
+    df_c['split'] = True # refine all new centers by default
+
+    for k in range(0, max_iter):
+        logging.info('perform_cluster: iter = '+str(k)+'/'+str(max_iter))
+        # sweep for rare sequences
+        logging.info('perform_cluster: sweeping for rare sequences')
+        df_c, df_align = eval(df_q, df_c, pw_config, workspace, best=True)
+        
+        p = np.percentile(df_align['match_score'].values, 5)
+        c = df_align['match_score'] > p
+        uncover = set(df_q['id'].astype(str)) - set(df_align[c]['query_id'].astype(str))
+        logging.info('perform_cluster: match_score < '+str(p)+' uncovered '+str(len(uncover))+'/'+str(len(df_q)))
+        if len(uncover) > 0:
+            uncover = df_q[df_q['id'].isin([i for i in uncover])]
+            cout = bpy.cluster_sample(uncover, N=100, th=0.8, rsize=1, config=pw_config, workspace=workspace)
+            cout['split'] = True
+            df_c = df_c.append(cout[['id','sequence','split']])
+            df_c['id'] = ['cluster'+str(i) for i in range(0,len(df_c))]
+        
+        # do splitting 
+        logging.info('perform_cluster: splitting clusters based on threshold = '+str(th_s))
+        df_c, df_align = eval(df_q, df_c, pw_config, workspace, best=True)
+        # mark clusters to split
+        squeue = []
+        for cid, split in df_c[['id','split']].values:
+            v = df_align[df_align['database_id']==cid]['match_score'].values
+            p = np.percentile(v, 25)
+            if p < th_s or split:
+                logging.info('perform_cluster: cid='+cid+' p='+str(p)+' N='+str(len(v)))
+                squeue.append(cid)
+        # do the split
+        keep = set(df_c['id'].astype(str)) - set(squeue)
+        df_c = df_c[df_c['id'].isin([i for i in keep])]
+        for i in range(0,len(squeue)):
+            qout = squeue[i]
+            logging.info('perform_cluster: splitting on cid='+qout+' '+str(i)+'/'+str(len(squeue)))
+            qlist = cluster_subsample(df_align, [qout], N=N, rand=True, metric='match_score')
+            qlist = df_q[df_q['id'].isin(qlist)]
+            cout = cluster_compute(qlist, csize, outliers=False, pw_config=pw_config, msa_config=msa_config, workspace=workspace)
+            if len(cout) > 0:
+                cout['split']=False
+                df_c = df_c.append(cout)
+        df_c['id'] = ['cluster'+str(i) for i in range(0,len(df_c))]
+
+        # merge redundant clusters
+        logging.info('perform_cluster: merging clusters')
+        df_c, df_align = eval(df_q, df_c, pw_config, workspace, best=False)
+        # get the cosimilarity matrix
+        vec = bpy.get_feature_vector(df_align[['query_id','database_id','AS']])
+        cols = vec.columns[vec.columns!='id']
+        x = vec[cols].values
+        cosim = bpy.dist_cosine(x.T, x.T)
+        cosim = pd.DataFrame(cosim, columns=cols)
+        cosim['id'] = cols
+
+        df_clst = bpy.cluster_hierarchical(cosim, metric='precomputed', linkage='complete', thresh=th_m)
+        # clusters not to perform merge
+        c = df_clst['cluster_id']== -1
+        df_c = df_c[df_c['id'].isin(df_clst[c]['id'])]
+        mqueue = []
+        # extract clusters to merge
+        for cid in np.unique(df_clst[~c]['cluster_id']):
+            x = df_clst[df_clst['cluster_id'] == cid]['id'].values
+            mqueue.append([j for j in x])
+        logging.info('perform_cluster: '+str(np.sum(~c))+'/'+str(len(df_c))+' clusters to merge')
+        #df_align = get_best(df_align, ['query_id'], 'match_score')
+        for i in range(0,len(mqueue)):
+            mout = mqueue[i]
+            logging.info('perform_cluster: doing merging on '+str(len(mout))+' clusters, '+str(i)+'/'+str(len(mqueue)))
+            qlist = cluster_subsample(df_align, mout, N=500, rand=False, metric='match_score')
+            qlist = df_q[df_q['id'].isin(qlist)]
+            cout = cluster_compute(qlist, csize, outliers=False, pw_config=pw_config, msa_config=msa_config, workspace=workspace)
+            if len(cout) > 0:
+                cout['split']=True
+                df_c.append(cout)
+        df_c['id'] = ['cluster'+str(i) for i in range(0,len(df_c))]
+        
+        # track progress
+        if ofile!= '': # debug
+            import datetime
+            ts = ''
+            if timestamp:
+                ts = '_'+datetime.datetime.fromtimestamp(time.time()).strftime('%Y_%m_%d_%H_%M_%S')
+            fname = ofile+'_'+str(k)+ts+'_c'+str(len(df_c))+'.csv.gz'
+            df_c.to_csv(fname, index=False, compression='infer')
+        
+    logging.info('perform_cluster: complete')
+    return df_c
+
+def cluster_subsample(df_align, dlist, N=500, rand=False, metric='match_score'):
+    if rand==False:
+        df_align = df_align.sort_values(by=['database_id',metric])
+    x = []
+    for d in dlist:
+        v = df_align[df_align['database_id']==d]['query_id'].values
+        if rand:
+            ridx = np.random.permutation(len(v))
+            qlist = v[ridx[:N]]
+        else:
+            qlist = v[:N]
+        x+= [q for q in qlist]
+    return np.unique(x)
+
+def cluster_compute(df_q, csize=20, outliers=False, pw_config ='-k15 -w10 -D', msa_config='', workspace='./clust_run/'):
+    '''
+    Find cluster centers for a set of sequence data
+    qry = dataframe of query sequences to search for cluster centers.
+           Must have at least the following columns:
+           [id, sequence]
+           [id, sequence, quality]
+           [id, sequence, msa_input_file]
+           msa_input_files should be in fasta or fastq format
+           with filename as .fasta, .fa, .fastq, or .fq 
+    csize = number of sequences to take from cluster center for multi-seq alignment
+    workspace = workspace folder for the aligner
+    '''
+    # make sure names are strings
+    df_q['id'] = df_q['id'].astype(str)
+    if len(df_q) < 2:
+        logging.warning('sample size=1, too small to do anything')
+        if outliers:
+            return df_q[['id','sequence']]
+        return []
+    # compute pairwise similarity --> slower but more accurate
+    logging.info('cluster_compute: computing pairwise distance matrix')
+    files = bpy.get_pairwise_distance(df_q, block=500, output_folder=workspace, workspace=workspace, config=pw_config, symmetric=True)
+    df = pd.concat([pd.read_csv(f) for f in files])
+    bpy.batch_file_remove(files) # clean up the files
+    # catch error in case pairwise alignment fails
+    if len(df) == 0:
+        logging.warning('cluster_compute: not enough samples to cluster')
+        if outliers:
+            return df_q[['id','sequence']]
+        return []
+    metric = 'match_score'
+    df = bpy.get_best(df, ['query_id','database_id'], metric)
+    df = bpy.get_feature_vector(df[['query_id','database_id',metric]], symmetric=True)
+    df = bpy.get_symmetric_matrix(df, sym_larger=False)
+    # convert to distance
+    logging.info('preparing precomputed data')
+    for i in range(0,len(df)):
+        df.iloc[:,i] = 1-df.iloc[:,i]
+        df.iat[i,i] = 0
     
-    df_cl = df_cl.merge(df_d, on = 'id', how = 'left')
-    c = df_cl['cluster_id'] > -1
-    if len(df_cl[c]) > 0:
-        df_m = bpy.cluster_spoa_merge(df_cl[c], config = msa_config, workspace = workspace,
-                                      batch_size = 100, cleanup = True, log_file = log_file)
-        if len(df_m) > 0:
-            df_d = pd.concat([df_cl[~c][['id','sequence']], df_m])
-        '''
-        # sample instead of merging
-        df_m = []
-        for i in np.unique(df_cl[c]['cluster_id']):
-            t = df_cl[df_cl['cluster_id']==i].values
-            ridx = np.random.permutation(len(t))
-            df_m.append(t[ridx[0]])
-        out = pd.DataFrame(out, columns=df_cl.columns)
-        df_d = pd.concat([df_cl[~c][['id','sequence']], out[['id','sequence']]])
-        '''
+    # do optics on raw data
+    logging.info('cluster_compute: running optics')
+    df_clst = bpy.cluster_OPTICS(df, metric='precomputed', alt_label = True)
+    df_clst = df_clst.merge(df_q, on='id', how='left')
+    df_o = df_clst[df_clst['cluster_id'] == -1]
+    df_i = df_clst[df_clst['cluster_id'] > -1]
+    # do merge via msa if needed
+    if len(df_i) > 0:
+        din = []
+        for cid in np.unique(df_i['cluster_id']):
+            df = df_i[df_i['cluster_id'] == cid]
+            din.append(df.iloc[:csize])
+        df_i = bpy.cluster_spoa_merge(pd.concat(din), config=msa_config, workspace=workspace, cleanup=True)
+    # return results
+    col = ['id','sequence']
+    if outliers and len(df_i) > 0:
+        return pd.concat([df_i[col], df_o[col]])
+    elif outliers and len(df_i)==0:
+        return df_o[col]
+    elif outliers==False and len(df_i) > 0:
+        return df_i[col]
     else:
-        bpy.append_to_log('clustering did not reduce sequence space', log_file)
-    return df_d
+        logging.warning('cluster_compute: no clusters found')
+        return []
 
-def check_folder(folder):
-    # for error checking of folder name to make sure what program expects is consistent
-    folder = folder.split('/')
-    out = ''
-    for j in folder:
-        if j!='':
-            out+=j+'/'
-    return out
+def update_config(default, new_config):
+    '''
+    Updates default variables with user specified variables
+    default = dict contain default variables
+    new_config = dict contain new variables
+    '''
+    # load settings of old config file
+    if type(new_config['config_file'])==str and os.path.exists(new_config['config_file']):
+        with open(new_config['config_file'], 'r') as f:
+            default = json.load(f)
+    folders = ['workspace','frag_folder','msa_folder','clst_folder']
+    # update settings
+    for k in new_config.keys():
+        if new_config[k]!=None:
+            default[k] = new_config[k]
+            if k in folders:
+                default[k] = bpy.check_dir(default[k], fname_only=True)
+    # apply new settings to old config file
+    if type(new_config['config_file'])==str:
+        with open(new_config['config_file'], 'w') as f:
+            logging.info('writing new settings to '+new_config['config_file'])
+            json.dump(default, f, indent=2)
+    return default
 
-def print_help(argv):
-    print('Usage: '+argv[0]+' [options] -i fastq_data_folder primers.csv -o output.csv')
-    print('''
-    Options:
-    -h or --help           print help
-    
-    -i <folder>            folder for input fastq data
-
-       <file>              csv file of forward and reverse primers used
-                           primer csv must have the following columns:
-                           [fwd_id,fwd_seq,rev_id,rev_seq]
-    
-    -o <file>              where consensus csv information is written
-    
-    -db <file>             provides a file containing custom reference sequences to search for.
-                           valid inputs:
-                           <output.csv> with columns [id, sequence]
-                           
-                           The script will try generating its own reference database via primer info
-                           if this info is not given
-
-    -ff <folder>           folder where frag info are saved
-    
-    -mf <folder>           folder where multi-sequence fasta and phred info is stored
-    
-    -log <file>            file to save run logs info
-
-    -prfg                  Run pseudo reference database generator
-                           if db <file> is provided, this option is overridden and 
-                           the database file is used as the pseudo reference database for read mapping
-
-    -fs <array>            array of sizes ranges to check for forward and reverse primers when generating the
-                           pseudo reference database.
-                           Default = [[500,1000]]
-                           Examples:
-                           -fs [[500,1000],[1200,2000]]
-
-    -prf_raw               Do not do clustering on generated pseudo reference sequences
-                           Output raw sequences only
-                           
-    -prf_th x              if x > 1, x = number of clusters for hierarchical complete linkage clustering
-                           if x < 1, x = threshold linkage distance used
-
-    -fgs                   run fragment finder, requires fastq data
-
-
-    -msa                   run multi-sequence alignment, requires frag data
-
-    -cons                  run consensus generation, requires msa data
-
-    -pmf <file>            output for primer matching info
-
-    -fpmr                  run matching of primers to consensus reads, requires consensus read <output.csv>
-
-    -trmc                  trim primers from consensus reads, requires consensus read <output.csv> and <primer match file>
-    
-    -clst                  run clustering on consensus sequences
-    
-    -cf <folder>           folder for clustering data
-    
-    -cin <file>            input file for clustering, otherwise it defaults to trimmed_consensus.csv.gz
-    
-    -cout <file>           output file for cluster center sequences
-
-    -cl_param a b c d
-                        a = min_cluster_size
-                        b = thresh_split = thresh accuracy of lower quartile for splitting during clustering
-                        c = thresh_merge = thresh cosimilarity for merging during clustering
-                        d = N_rsamp = how many random samples to take from subcluster
-                            Lower number means faster run time at the cost of sensitivity for
-                            rare clusters
-    ''')
-    sys.exit(1)
 #########################################################################################################
 # Actual sequence of code in pipeline begins here
-def main(argv):
-    if len(argv)<2:
-        print_help(argv)
+def main():
+    parser = argparse.ArgumentParser(description='aSHuRE: a consensus error correction pipeline for nanopore sequencing',
+                        formatter_class=argparse.RawTextHelpFormatter)
+    # variable to store default configs
+    config = {}
 
-    # Important file and folder defaults
-    fastq_folder = './fastq/'
-    primer_file = 'primers.csv'
-    db_file = ''
-    pseudodb_file = 'pseudodb.csv.gz'
-    pseudo_config = '[[500,1200]]'
-    frag_folder = './frags/'
-    frag_config = '-k10 -w1'
-    msa_folder = './msa/'
-    msa_config = '-n -15 -g -10 -l 0 -r 2'
-    cons_file = 'consensus.csv.gz'
-    pmatch_file = 'primer_match.csv.gz'
-    cout_file = 'clusters.csv.gz'
-    cluster_folder = './clusters/'
-    log_file = 'log.txt'
-    run_pseudoref_gen = False
-    run_pseudoref_clust = True
-    run_frag = False
-    run_msa = False
-    run_consensus = False
-    run_primer_match = False
-    run_trim_primers = False
-    run_cluster = False
-    min_cluster_size = 5
-    prf_thresh = 0.50
-    thresh_merge = 0.9
-    thresh_split = 0.9
-    N_rsamp = 2000
+    # add subcommands for modifying the run configuration 
+    subparser = parser.add_subparsers(title='subcommands', dest='subcommand')
+    run_parser = subparser.add_parser('run', formatter_class=argparse.RawTextHelpFormatter, help='suboptions for running the pipeline')
+    config['fastq']=[]
+    run_parser.add_argument('-fq', dest='fastq', type=str, nargs='+', help='fastq files from the basecaller')
+    config['primer_file']='primers.csv'
+    run_parser.add_argument('-p', dest='primer_file', type=str,
+            help='''csv file containing forward and reverse primers used.
+    This must have at least columns [fwd_id, fwd_seq, rev_id, rev_seq]''')
+    config['db_file']='pseudodb.csv.gz'
+    run_parser.add_argument('-db', dest='db_file', type=str,
+            help='''reference sequences to search fragments with (optional). If this is not provided prfg is run.
+    This file can be a csv with columns [id, sequence] or fastq or fastq format
+    If prfg is run, then the new pseudo reference sequences are written to this file''')
+    config['workspace']='./workspace/'
+    run_parser.add_argument('-w', dest='workspace', type=str, help='workspace folder where frags, msa, clusters, and other output are stored')
+    config['cons_file']='consensus.csv.gz'
+    run_parser.add_argument('-o1', dest='cons_file', type=str, help='output csv file for consensus sequence information')
+    config['pmatch_file']='pmatch.csv.gz'
+    run_parser.add_argument('-o2', dest='pmatch_file', type=str, help='output csv file for primer matches to each fastq read')
+    config['cin_file']='trimmed_'+config['cons_file']
+    run_parser.add_argument('-o3', dest='cin_file', type=str, help='input file for clustering and output for trimmed consensus')
+    config['cout_file']='clusters.csv.gz'
+    run_parser.add_argument('-o4', dest='cout_file', type=str, help='output csv file for sequence of cluster centers')
+    config['log_file']='ashure.log'
+    config['low_mem']=False
+    run_parser.add_argument('--low_mem', dest='low_mem', action='store_true', help='enable optimizations that reduce RAM used')
+    run_parser.add_argument('-log', dest='log_file', type=str, help='log file where pipeline progress is logged')
+    config['config_file']=''
+    run_parser.add_argument('-c', dest='config_file', type=str,
+            help='''Input json file where run configuration is stored.
+    If none is provided, the default config is used.''')
+    run_parser.add_argument('-r', dest='run', type=str,
+            help='''Specify what subsets of this pipeline to run
+    prfg = generate pseudo reference database using primer information
+    fgs  = find repeated fragments in fastq reads
+    msa  = run multi-sequence alignment on repeated reads
+    cons = read consensus output after multi-sequence alignment
+    fpmr = map primers to each consensus fastq read
+    trmc = trim primers from consensus reads
+    clst = running clustering on trimmed reads
     
-    # parse some arguments from user
-    print(argv)
-    bpy.append_to_log('Running the pipeline', log_file)
-    for i in range(0,len(argv)):
-        if argv[i] == '-h' or argv[i] == '--help': print_help(argv)
-        elif argv[i] == '-i':
-            fastq_folder = check_folder(argv[i+1])
-            primer_file = argv[i+2]
-        elif argv[i] == '-o': cons_file = argv[i+1]
-        elif argv[i] == '-pmf': pmatch_file = argv[i+1]
-        elif argv[i] == '-db': db_file = argv[i+1]
-        elif argv[i] == '-log': log_file = argv[i+1]
-        elif argv[i] == '-ff': frag_folder = check_folder(argv[i+1])
-        elif argv[i] == '-mf': msa_folder = check_folder(argv[i+1])
-        elif argv[i] == '-prfg': run_pseudoref_gen = True
-        elif argv[i] == '-prf_raw': run_pseudoref_clust = False
-        elif argv[i] == '-prf_th': prf_thresh = argv[i+1]
-        elif argv[i] == '-fs': pseudo_config = argv[i+1]
-        elif argv[i] == '-fgs': run_frag = True
-        elif argv[i] == '-msa': run_msa = True
-        elif argv[i] == '-cons': run_consensus = True
-        elif argv[i] == '-fpmr': run_primer_match = True
-        elif argv[i] == '-trmc': run_trim_primers = True
-        elif argv[i] == '-clst': run_cluster = True
-        elif argv[i] == '-cin': cin_file = argv[i+1]
-        elif argv[i] == '-cout': cout_file = argv[i+1]
-        elif argv[i] == '-cf': cluster_folder = argv[i+1]
-        elif argv[i] == '-clst_param':
-            min_cluster_size = int(argv[i+1])
-            thresh_merge = float(argv[i+2])
-            thresh_split = float(argv[i+3])
-            N_rsamp = int(argv[i+4])
+    -r msa,cons runs only multi-seq alignment and consensus readout''')
+ 
+    # config for pseudo reference generator
+    prfg_parser = subparser.add_parser('prfg', formatter_class=argparse.RawTextHelpFormatter, help='suboptions for pseudo reference generator')
+    config['prfg_fs']='500-1200'
+    prfg_parser.add_argument('-fs', dest='prfg_fs', type=str,
+            help='''fastq read size ranges to search for primers
+    -fs 100-200             searches for fragments in reads of length 100-200bp
+    -fs 100-200,500-900     searches for fragments in reads of length 100-200bp and 500-900bp''')
+    config['prfg_config']='-k5 -w1 --score-N 0 -s 20 -P'
+    prfg_parser.add_argument('-c', dest='prfg_config', type=str, help='config passed to minimap2')
+    prfg_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
+    prfg_parser.add_argument('-r', dest='run_prfg', action='store_true', help='generate pseudo reference database now with the current configuration')
+    prfg_parser.add_argument('-fq', dest='fastq', type=str, nargs='+', default=[], help='fastq reads to search')
+    prfg_parser.add_argument('-p', dest='primer_file', type=str,
+            help='''csv file containing forward and reverse primers used.
+    This must have at least columns [fwd_id, fwd_seq, rev_id, rev_seq]''')
+    prfg_parser.add_argument('-o', dest='db_file', type=str, help='output csv file of pseudo reference sequences')
+    prfg_parser.add_argument('--low_mem', dest='low_mem', action='store_true', help='enable optimizations that reduce RAM used')
+    
+    # config for repeat frag finder
+    fgs_parser = subparser.add_parser('fgs', help='suboptions for repeat fragment finder')
+    config['fgs_config']='-k10 -w1'
+    fgs_parser.add_argument('-c', dest='fgs_config', type=str, help='config options passed to minimap2')
+    fgs_parser.add_argument('-fq', dest='fastq', type=str, nargs='+', default=[], help='fastq reads to search')
+    fgs_parser.add_argument('-db', dest='db_file', type=str, help='file containing reference sequences used in fragment search')
+    config['frag_folder']='./frags/'
+    fgs_parser.add_argument('-o', dest='frag_folder', type=str, help='folder where frags csv files are stored')
+    fgs_parser.add_argument('-r', dest='run_fgs', action='store_true', help='run repeat fragment finder')
+    fgs_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
+    fgs_parser.add_argument('--low_mem', dest='low_mem', action='store_true', help='enable optimizations that reduce RAM used')
 
-    # if nothing is select, then default is to run everything
-    if (run_msa + run_frag + run_pseudoref_gen
-        + run_consensus + run_primer_match + run_trim_primers + run_cluster)==False:
-        run_pseudoref_gen = True
-        run_frag = True
-        run_msa = True
-        run_consensus = True
-        run_primer_match = True
-        run_trim_primers = True
-        run_cluster = True
-    
+    # config for multi-sequence alignment
+    msa_parser = subparser.add_parser('msa', help='suboptions for multi-sequence alignment')
+    config['msa_config']='-n -15 -g -10 -l 0 -r 2'
+    msa_parser.add_argument('-c', dest='msa_config', type=str, help='config options passed to spoa multi-sequence aligner')
+    msa_parser.add_argument('-fq', dest='fastq', nargs='+', type=str, help='fastq files')
+    msa_parser.add_argument('-i', dest='frag_folder', type=str, help='folder where frags csv files are stored')
+    config['msa_folder']='./msa/'
+    msa_parser.add_argument('-o1', dest='msa_folder', type=str, help='folder where msa input and output files are saved')
+    msa_parser.add_argument('-o2', dest='cons_file', type=str, help='output csv file for consensus sequences')
+    msa_parser.add_argument('-r1', dest='run_msa', action='store_true', help='run multi-sequence alignment')
+    msa_parser.add_argument('-r2', dest='run_cons', action='store_true', help='read consensus after multi-sequence alignment')
+    msa_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
+    msa_parser.add_argument('--low_mem', dest='low_mem', action='store_true', help='enable optimizations that reduce RAM used')
+
+    # config for matching primers to reads
+    fpmr_parser = subparser.add_parser('fpmr', help='suboptions for matching primers to consensus reads')
+    config['fpmr_config']='-k5 -w1 --score-N 0 -s 20 -P'
+    fpmr_parser.add_argument('-c', dest='fpmr_config', help='config options passed to minimap2 aligner')
+    fpmr_parser.add_argument('-i', dest='cons_file', help='input untrimmed consensus csv files')
+    fpmr_parser.add_argument('-p', dest='primer_file', type=str,
+            help='''csv file containing forward and reverse primers used.
+    This must have at least columns [fwd_id, fwd_seq, rev_id, rev_seq]''')
+    fpmr_parser.add_argument('-o', dest='pmatch_file', help='csv file containing primer match information')
+    fpmr_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
+    fpmr_parser.add_argument('-r1', dest='run_fpmr', action='store_true', help='run primer matching')
+    fpmr_parser.add_argument('-r2', dest='run_trmc', action='store_true', help='trim primers from reads')
+
+    # config for clustering
+    clst_parser = subparser.add_parser('clst', help='suboptions for clustering')
+    clst_parser.add_argument('-i', dest='cin_file', type=str, help='input csv file of sequences to cluster')
+    clst_parser.add_argument('-o', dest='cout_file', type=str, help='output csv file for cluster center sequences')
+    config['clst_folder']='./clusters/'
+    clst_parser.add_argument('-f', dest='clst_folder', type=int, help='folder where clustering work is saved')
+    config['clst_min_k']=5
+    clst_parser.add_argument('-k', dest='clst_min_k', type=int, help='min_cluster_size')
+    config['clst_th_m']=0.9
+    clst_parser.add_argument('-tm', dest='clst_th_m', type=float, help='threshold for marking clusters to merge')
+    config['clst_th_s']=0.9
+    clst_parser.add_argument('-ts', dest='clst_th_s', type=float, help='threshold to mark clusters for splitting')
+    config['clst_N']=2000
+    clst_parser.add_argument('-N', dest='clst_N', type=int, help='size of sequence subsample')
+    config['clst_N_iter']=10
+    clst_parser.add_argument('-iter', dest='clst_N_iter', type=str, help='number of iterations to run clustering')
+    config['clst_pw_config']='-k15 -w10 -p 0.8 -D'
+    clst_parser.add_argument('-pw_config', dest='clst_pw_config', type=str, help='config passed to minimap2')
+    clst_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
+    clst_parser.add_argument('-r', dest='run_clst', action='store_true', help='run clustering')
+    args = parser.parse_args()
+    bpy.init_log(config['log_file'])
+    if args.subcommand==None:
+        logging.error('please select subcommand to run')
+        sys.exit(1)
+
+    # apply new settings
+    config = update_config(config, vars(args))
+
+    # default runs
+    keys = ['prfg','fgs','msa','cons','fpmr','trmc','clst']
+    for k in keys:
+        config['run_'+k]=False # set everything to false
+
+    # if nothing is selected, then default is to run everything
+    if args.subcommand=='run':
+        if type(args.run)==type(None):
+            if args.db_file==None:
+                config['run_prfg']=True
+            keys = ['fgs','msa','cons','fpmr','trmc','clst']
+            for k in keys:
+                config['run_'+k]=True
+        elif type(args.run)==str:
+            args.run = args.run.split(',')
+            keys = ['prfg','fgs','msa','cons','fpmr','trmc','clst']
+            for k in keys:
+                config['run_'+k] = k in args.run
+    elif args.subcommand in keys:
+        user_config = vars(args)
+        for k in user_config.keys():
+            if 'run_' in k:
+                config[k] = user_config[k]
+
     # Print run settings
-    bpy.append_to_log('fastq_folder     = '+fastq_folder, log_file)
-    bpy.append_to_log('primer_file      = '+primer_file, log_file)
-    if db_file!='':
-        run_pseudoref_gen = False
-        bpy.append_to_log('db_file          = '+db_file, log_file)
-    else:
-        bpy.append_to_log('pseudodb_file    = '+pseudodb_file, log_file)
-        bpy.append_to_log('pseudo_fs        = '+pseudo_config, log_file)
-    bpy.append_to_log('log_file         = '+log_file, log_file)
-    bpy.append_to_log('frag_data_folder = '+frag_folder, log_file)
-    bpy.append_to_log('msa_data_folder  = '+msa_folder, log_file)
-    bpy.append_to_log('cons_file        = '+cons_file, log_file)
-    cin_file = 'trimmed_'+cons_file
-    bpy.append_to_log('cin_file         = '+cin_file, log_file)
-    bpy.append_to_log('cout_file        = '+cout_file, log_file)
-    bpy.append_to_log('cluster_folder   = '+cluster_folder, log_file)
-    bpy.append_to_log('Run Pseudoref generator = '+str(run_pseudoref_gen), log_file)
-    bpy.append_to_log('Cluster pseudo ref      = '+str(run_pseudoref_clust), log_file)
-    bpy.append_to_log('Run Fragment Search     = '+str(run_frag), log_file)
-    bpy.append_to_log('Run Multi-Seq Alignment = '+str(run_msa), log_file)
-    bpy.append_to_log('Run Consensus           = '+str(run_consensus), log_file)
-    bpy.append_to_log('Run primer match        = '+str(run_primer_match), log_file)
-    bpy.append_to_log('Run trim primers        = '+str(run_trim_primers), log_file)
-    bpy.append_to_log('Run clustering          = '+str(run_cluster), log_file)
-    bpy.append_to_log('prf: thresh             = '+str(prf_thresh), log_file)    
-    bpy.append_to_log('clust: min_cluster_size = '+str(min_cluster_size), log_file)
-    bpy.append_to_log('clust: thresh_merge     = '+str(thresh_merge), log_file)
-    bpy.append_to_log('clust: thresh_split     = '+str(thresh_split), log_file)
-    bpy.append_to_log('clust: N_rsamp          = '+str(N_rsamp), log_file)
-    
-    # Load the fastq data
-    if run_frag or run_msa or run_pseudoref_gen:
-        bpy.append_to_log('loading fastq data', log_file)
-        files = glob.glob(fastq_folder+'*.fastq')
-        reads = bpy.load_basecalled_data(files, log_file)
-    
-    # use reference library sequences if it exists
-    if db_file!='':
-        bpy.append_to_log('Loading '+db_file+' as reference database', log_file)
-        ftype = db_file.split('.')[1]
-        if ftype == 'csv':
-            ref = pd.read_csv(db_file)
-            ref = ref[['id','sequence']]
-        elif ftype == 'fa' or ftype == 'fasta':
-            ref = bpy.read_fasta(db_file)
-        elif ftype == 'fq' or ftype == 'fastq':
-            ref = bpy.read_fastq(db_file)
-    else:
-        db_file = pseudodb_file
+    logging.info('Running the pipeline')
+    logging.info('config_file = '+config['config_file'])
+    logging.info('primer_file = '+config['primer_file'])
+    logging.info('pseudo_fs   = '+config['prfg_fs'])
+    logging.info('prfg_config = '+config['prfg_config'])
+    logging.info('db_file     = '+config['db_file'])
+    logging.info('N fastq     = '+str(len(config['fastq'])))
+    logging.info('frag_folder = '+config['frag_folder'])
+    logging.info('fgs_config  = '+config['fgs_config'])
+    logging.info('msa_folder  = '+config['msa_folder'])
+    logging.info('msa_config  = '+config['msa_config'])
+    logging.info('cons_file        = '+config['cons_file'])
+    logging.info('fpmr_config      = '+config['fpmr_config'])
+    logging.info('pmatch_file      = '+config['pmatch_file'])
+    logging.info('cin_file         = '+config['cin_file'])
+    logging.info('cout_file        = '+config['cout_file'])
+    logging.info('clst_folder      = '+config['clst_folder'])
+    logging.info('clst_pw_config   = '+config['clst_pw_config'])
+    logging.info('clst_N      = '+str(config['clst_N']))
+    logging.info('clst_th_s   = '+str(config['clst_th_s']))
+    logging.info('clst_th_m   = '+str(config['clst_th_m']))
+    logging.info('clst_min_k  = '+str(config['clst_min_k']))
+    logging.info('clst_N_iter = '+str(config['clst_N_iter']))
+    logging.info('workspace        = '+config['workspace'])
+    logging.info('Run Pseudoref generator = '+str(config['run_prfg']))
+    logging.info('Run Fragment Search     = '+str(config['run_fgs']))
+    logging.info('Run Multi-Seq Alignment = '+str(config['run_msa']))
+    logging.info('Run Consensus           = '+str(config['run_cons']))
+    logging.info('Run primer match        = '+str(config['run_fpmr']))
+    logging.info('Run trim primers        = '+str(config['run_trmc']))
+    logging.info('Run clustering          = '+str(config['run_clst']))
+    logging.info('low_mem                 = '+str(config['low_mem']))
 
+    # Load the fastq data
+    if config['run_fgs'] or config['run_msa'] or config['run_prfg']:
+        logging.info('loading fastq data')
+        if len(config['fastq'])==0:
+            logging.error('no fastq files provided')
+            sys.exit(1)
+        reads = bpy.load_ONT_fastq(config['fastq'], low_mem=config['low_mem'])
+    
     # run pseudo reference database generator if selected
-    if run_pseudoref_gen:
+    if config['run_prfg']:
         # load primers
-        primers = bpy.load_primers(primer_file)
+        primers = bpy.load_primers(config['primer_file'])
 
         # generate pseudo reference database using primer info
-        bpy.append_to_log('Generating pseudo reference database', log_file)
-        ref = generate_pseudo_refdb(primers, reads, block=100000, f_sizes = pseudo_config, log_file = log_file)
-        ref.to_csv(db_file, index=False, compression='infer')
-        db_file = pseudodb_file
-
-        if run_pseudoref_clust:
-            ref = pd.read_csv(db_file)
-            n_iter = 1
-            for k in range(0,n_iter):
-                ref = clust_pseudoref(ref, metric = 'match_score', linkage = 'complete', thresh = prf_thresh,
-                            pw_config = '-k15 -w10 -p 0.9 -D', msa_config = '-n -15 -g -10 -l 0 -r 2',
-                            workspace = './clust_pseudoref/', pw_output = './pw_out/', log_file = log_file)
-                #ref.to_csv(db_file+'.'+str(k), index=False, compression='infer')
-            ref.to_csv(db_file, index=False, compression='infer')
-
-    # Find RCA fragments with the aligner
-    if run_frag:
-        # load reference database
-        if os.path.exists(db_file):
-            ref = pd.read_csv(db_file)
+        logging.info('Generating pseudo reference database')
+        ref = generate_pseudo_refdb(primers, reads, block=100000, fs=config['prfg_fs'], config=config['prfg_config'])
+        ref.to_csv(config['db_file'], index=False, compression='infer')
+    
+    # load reference database
+    if config['run_fgs']:
+        if os.path.exists(config['db_file']):
+            logging.info('Loading '+config['db_file']+' as reference database')
+            ftype = config['db_file'].split('.')
+            if 'csv' in ftype:
+                ref = pd.read_csv(config['db_file'])
+                ref = ref[['id','sequence']]
+            elif 'fa' in ftype or 'fasta' in ftype:
+                ref = bpy.read_fasta(config['db_file'])
+            elif 'fq' in ftype or 'fastq' in ftype:
+                ref = bpy.read_fastq(config['db_file'])
         else:
-            bpy.append_to_log('Reference database '+db_file+' not found', log_file)
+            logging.error('Reference database '+config['db_file']+' not found')
             sys.exit(1)
-            
-        # make data directory
-        bpy.check_dir(frag_folder)
-        
-        # search or RCA fragments in reads
-        bpy.append_to_log('Searching for RCA frags in reads', log_file)
-        find_RCA_frags(ref, reads, block=10000, folder = frag_folder, config = frag_config, log_file = log_file)
-        bpy.append_to_log('Aligner done', log_file)
 
-    if run_msa:
+    if config['run_fgs']:
+        # search or RCA fragments in reads
+        logging.info('Searching for RCA frags in reads')
+        find_RCA_frags(ref, reads, block=10000, output=config['frag_folder'], config=config['fgs_config'])
+        logging.info('Aligner done')
+
+    if config['run_msa']:
         # Loading the data for multi-sequence alignment
-        bpy.append_to_log('Loading frags from '+frag_folder, log_file)
-        files = glob.glob(frag_folder+'fraginfo_*.csv.gz')
-        out = []
-        for i in files:
-            out.append(pd.read_csv(i))
-        frags = pd.concat(out)
-        
+        logging.info('Loading frags from '+config['frag_folder'])
+        files = glob.glob(config['frag_folder']+'fraginfo_*.csv.gz')
+        frags = pd.concat([pd.read_csv(f) for f in files])
         # filtering out overlapping frags
-        frags = bpy.remove_overlaps(frags, metric = 'AS', thresh = 50, log_file = 'log.txt')
+        frags = bpy.remove_overlaps(frags, metric='AS', thresh=50)
         
         # annotating information about the reads
-        bpy.append_to_log('annotating reads', log_file)
-        df_frags = annotate_reads(frags, log_file)
-        frags = frags.merge(df_frags[['query_id','N frags']], on = 'query_id', how = 'left')
-        bpy.append_to_log('annotation complete', log_file)
+        logging.info('annotating reads')
+        df_frags = annotate_reads(frags)
+        frags = frags.merge(df_frags[['query_id','N frags']], on='query_id', how='left')
+        logging.info('annotation complete')
         
         # Run multi-sequence alignment on fragments
-        bpy.append_to_log('Running multi-sequence aligner', log_file)
-        perform_spoa_MSA(reads, frags[frags['N frags'] > 1], batch_size = 100,
-                         config = msa_config, thread_lock = False,
-                         folder = msa_folder, log_file = log_file)
-        bpy.append_to_log('multi-sequence alignment done', log_file)
+        logging.info('Running multi-sequence aligner')
+        perform_MSA(reads, frags[frags['N frags'] > 1], batch_size=100, config=config['msa_config'], thread_lock=False, folder=config['msa_folder'])
+        logging.info('multi-sequence alignment done')
     
     # Generate consensus sequence and save the info
-    if run_consensus:
-        MSA_outfile = glob.glob(msa_folder+'*.out')
-        bpy.append_to_log('Number of MSA_outfiles='+str(len(MSA_outfile)), log_file)        
-        df = get_spoa_consensus(MSA_outfile, log_file)
+    if config['run_cons']:
+        MSA_outfile = glob.glob(config['msa_folder']+'*.out')
+        logging.info('Number of MSA_outfiles='+str(len(MSA_outfile)))        
+        df = get_spoa_consensus(MSA_outfile)
 
         # Write the data to file
-        bpy.append_to_log('Writing consensus output to: '+cons_file, log_file)
-        df.to_csv(cons_file, index=False, compression='infer')
-        bpy.append_to_log('Consensus generation done', log_file)
+        logging.info('Writing consensus output to: '+config['cons_file'])
+        df.to_csv(config['cons_file'], index=False, compression='infer')
+        logging.info('Consensus generation done')
         
     # match primers to read consensus
-    if run_primer_match:
+    if config['run_fpmr']:
         # load primer info
-        primers = bpy.load_primers(primer_file)
+        primers = bpy.load_primers(config['primer_file'])
 
         # load consensus info
-        bpy.append_to_log('Loading cons_file: '+cons_file, log_file)
-        df = pd.read_csv(cons_file)
+        logging.info('Loading cons_file: '+config['cons_file'])
+        df = pd.read_csv(config['cons_file'])
         
         # match the primers to consensus reads        
-        bpy.append_to_log('Matching primers to reads', log_file)
+        logging.info('Matching primers to reads')
         df = df.rename(columns={'consensus':'sequence'})
-        df = match_primer_to_read(primers, df[['id','sequence']], log_file = log_file)
+        df = match_primer_to_read(primers, df[['id','sequence']], config=config['fpmr_config'])
        
         # Write the data to file
-        bpy.append_to_log('Writing primer_match to '+pmatch_file, log_file)
-        df.to_csv(pmatch_file, index=False, compression='infer')
-        bpy.append_to_log('primer matching done', log_file)
+        logging.info('Writing primer_match to '+config['pmatch_file'])
+        df.to_csv(config['pmatch_file'], index=False, compression='infer')
+        logging.info('primer matching done')
 
-    if run_trim_primers:
+    if config['run_trmc']:
         # load data
-        bpy.append_to_log('Loading pmatch_file: '+pmatch_file, log_file)
-        df_pmatch = pd.read_csv(pmatch_file)
-        bpy.append_to_log('Loading cons_file: '+cons_file, log_file)
-        df_cons = pd.read_csv(cons_file)
-        df_cons = df_cons.rename(columns = {'consensus':'sequence'})
+        logging.info('Loading pmatch_file: '+config['pmatch_file'])
+        df_pmatch = pd.read_csv(config['pmatch_file'])
+        logging.info('Loading cons_file: '+config['cons_file'])
+        df_cons = pd.read_csv(config['cons_file'])
+        df_cons = df_cons.rename(columns={'consensus':'sequence'})
 
         # run the trimming operation
-        bpy.append_to_log('Trimming the reads', log_file)
-        df = trim_consensus(df_pmatch, df_cons, log_file = 'log.txt')
+        logging.info('Trimming the reads')
+        df = trim_consensus(df_pmatch, df_cons)
         df = df.merge(df_cons[['id','N frags']], on = 'id', how = 'left')
 
         # Write the data to file
-        bpy.append_to_log('Writing trimmed consensus sequence', log_file)
-        df.to_csv(cin_file, index=False, compression='infer')
-        bpy.append_to_log('primer matching done', log_file)
+        logging.info('Writing trimmed consensus sequence')
+        df.to_csv(config['cin_file'], index=False, compression='infer')
+        logging.info('primer matching done')
     
-    if run_cluster:
+    if config['run_clst']:
         # load data
-        bpy.append_to_log('Loading cin_file: '+cin_file, log_file)
-        df = pd.read_csv(cin_file).rename(columns = {'consensus':'sequence'})
+        logging.info('Loading cin_file: '+config['cin_file'])
+        df = pd.read_csv(config['cin_file']).rename(columns={'consensus':'sequence'})
 
         # only work on sequences which have both forward and reverse primers
         if 'fwd_primer_seq' in df.columns and 'rev_primer_seq' in df.columns:
             df = df[df['fwd_primer_seq'].notna() & df['rev_primer_seq'].notna()]
 
         # refine the clusters
-        data = bpy.cluster_refine(df, config = '-k15 -w10 -p 0.9 -D', ofile = 'rcent',
-                                  max_iter = 10, center_size = 20, min_samples = min_cluster_size,
-                                  thresh_merge = thresh_merge, thresh_split = thresh_split, N_rsamp = N_rsamp,
-                                  workspace = cluster_folder, log_file = log_file)
+        data = perform_cluster(df, max_iter=config['clst_N_iter'], csize=20, N=config['clst_N'], th_s=config['clst_th_s'], th_m=config['clst_th_m'], pw_config=config['clst_pw_config'], msa_config=config['msa_config'], workspace=config['clst_folder'], ofile='rcent', timestamp=True)
         
         # save data
-        bpy.append_to_log('Writing clustered sequences to '+cout_file, log_file)
-        data.to_csv(cout_file, index=False, compression='infer')
-        bpy.append_to_log('clustering done', log_file)
+        logging.info('Writing clustered sequences to '+config['cout_file'])
+        data.to_csv(config['cout_file'], index=False, compression='infer')
+        logging.info('clustering done')
         
 if __name__ == "__main__":
-    main(sys.argv)
+    main()
