@@ -36,14 +36,14 @@ def init_log(fname=None, level='DEBUG'):
         file_handler.setLevel(level)
         file_handler.setFormatter(formatter)
         N=2 # adds file_handler only once
-        if len(logging.getLogger().handlers) <= N:
+        if len(logging.getLogger().handlers) < N:
             logging.getLogger().addHandler(file_handler)
     # print to stdout
     stdout_handler = logging.StreamHandler(sys.stdout)
     stdout_handler.setLevel(level)
     stdout_handler.setFormatter(formatter)
     # add stream handler only once
-    if len(logging.getLogger().handlers) <= N:
+    if len(logging.getLogger().handlers) < N:
         logging.getLogger().addHandler(stdout_handler)
     logging.getLogger().setLevel(level)
 
@@ -299,7 +299,7 @@ def write_fasta(fname, data):
             text+= str(data[1]) + '\n'
             f.write(text)
 
-def get_SAM_info(read, key): # debug rewrite sam file parser to be more efficient
+def get_SAM_info(read, key):
     '''
     Function to parse useful info from a line of the SAM file
     '''
@@ -341,8 +341,8 @@ def parse_SAM(fname):
         while fsize > f.tell():
             text = f.readline()
             # dont record anything until we read past the header:w
-            if text[:3]=='\n@PG':
-                start = True
+            if ~record and text[:3]=='@PG':
+                record = True
                 text = f.readline()
             # start recording data
             if record:
@@ -763,11 +763,9 @@ def find_overlaps(df, thresh = 1):
     cluster = 0
     clusterN = []
     N=0
-    
     # iterate through the data
     for i in range(0,len(data)):
         # edge of id reached or new start exceeds prev stop
-        # might be buggy here --> look at this later #debug
         s1 = (cur_id!=data[i,0])
         s2 = (data[i,1] > cur_stop)
         s3 = (data[i,1] > cur_stop - thresh and thresh*2 < data[i][2] - data[i][1])
@@ -779,23 +777,19 @@ def find_overlaps(df, thresh = 1):
             N=0
         elif cur_stop < data[i,2]: # keep moving boundary of cluster forward
             cur_stop = data[i,2]
-        
         c[i] = cluster
         N+=1
     clusterN.append(N) # end of list reached, append final value
-    
     # add cluster num label to data
     data = df.iloc[s].copy()
     data['cluster_num'] = c
-
     # generate reference list of total counts for each cluster num label
     clusterN = np.transpose([range(0,len(clusterN)),clusterN])
     clusterN = pd.DataFrame(clusterN, columns = ['cluster_num','cluster_item_count'])
-    
     # merge the data
-    return data.merge(clusterN, on = 'cluster_num', how = 'left').set_index(df.index[s]) # merge and reset index
+    return data.merge(clusterN, on='cluster_num', how='left').set_index(df.index[s]) # merge and reset index
 
-def split_overlaps(df, thresh = 1):
+def split_overlaps(df, thresh=1):
     '''
     Function that iterates through list and reduces it to best scoring non-overlapping id
     df = dataframe with columns [id, start, stop, score]
@@ -805,24 +799,21 @@ def split_overlaps(df, thresh = 1):
     data = df.values # work on numpy array because its faster
     s = np.lexsort((data[:,3],data[:,0]))[::-1]
     data = data[s]
-        
-    # initial value for keep --> keep everything by default
-    keep = np.array([True]*len(data))
+    # initial value for keep --> keep everything that is big enough
+    keep = (thresh*2 < data[:,2] - data[:,1])
     for i in range(0,len(data)):
         if keep[i]:
             for j in range(i+1,len(data)):
                 # exit loop if end of read is reached
                 if data[i,0]!=data[j,0]:
                     break
-                else:
+                elif keep[j]:
                     # q_stop < cur_start or q_start > cur_stop --> then frags are not overlapping
                     s1 = data[i,2] < data[j,1]+thresh
                     s2 = data[i,1] > data[j,2]-thresh
                     # f1 in f2
-                    # f2 overlap f2 beyond thresh
-                    # thresh not triggered, but frags too small
-                    c = (s1 & s2) | ~(s1 | s2) | (thresh*2 > data[j,2] - data[j,1])
-                    keep[j] = bool(~c)
+                    # f1 overlap f2 beyond thresh
+                    keep[j] = (s1 | s2)
     # decode the original ordering and return data
     data = df.iloc[s[keep]]
     return data
@@ -841,11 +832,11 @@ def remove_overlaps(frags, metric='AS', thresh=0):
     df = frags.reset_index(drop=True)
     
     logging.info('filtering to best aligned fragments')
-    f1 = find_overlaps(df[['query_id','q_start','q_end']], thresh = thresh)
+    f1 = find_overlaps(df[['query_id','q_start','q_end']], thresh=thresh)
     s = f1[f1['cluster_item_count']>1]
     # do work only on overlapping info
     if len(s) > 0:
-        f2 = split_overlaps(df.iloc[s.index][['query_id','q_start','q_end',metric]], thresh = thresh)
+        f2 = split_overlaps(df.iloc[s.index][['query_id','q_start','q_end',metric]], thresh=thresh)
         f2 = df.iloc[f2.index] # get the split up frags
         f1 = df.iloc[f1[f1['cluster_item_count']==1].index] # get single frags
         df = pd.concat([f1,f2]) # add them together
