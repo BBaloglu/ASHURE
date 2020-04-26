@@ -5,13 +5,11 @@
 # Loading libraries
 import numpy as np
 import pandas as pd
-
 # For interfacing with the file system
 import subprocess
 import os
 import time
 import argparse
-
 # Loading the custom libraries
 import bilge_pype as bpy
 
@@ -23,11 +21,9 @@ def load_file(filename, run_info=None):
     # check if it is a fasta file
     if ('fasta' in file_format) or ('fa' in file_format):
         A = bpy.read_fasta(filename)
-    
     # check if it is a fastq file
     elif ('fastq' in file_format) or ('fq' in file_format):
         A = bpy.read_fastq(filename)
-    
     # assume it is a csv file otherwise
     else:
         A = pd.read_csv(filename)
@@ -81,7 +77,6 @@ def main():
     parser.add_argument('-wf', dest='workspace', type=str, default='./aligner_folder/',
                         help='''Workspace folder for the aligner''')
     args = parser.parse_args()  
-
     print('query file       = ', args.qfile)
     print('database file    = ', args.dfile)
     print('run_info         = ', args.run_info)
@@ -90,13 +85,11 @@ def main():
     print('aligner folder   = ', workspace)
     print('all alignments   = ', args.all)
     start = time.time()
-        
     # loading the data
     print('Loading query file:', args.qfile)
     A = load_file(args.qfile)
     print('Loading database file:', args.dfile)
     B = load_file(args.dfile, args.run_info)
-
     # Run the aligner
     if args.aligner=='bowtie2':
         print('Running bowtie2')
@@ -115,22 +108,24 @@ def main():
         metric = 'AS'
     subprocess.run(['rm','-r',workspace])
     print('Found ',len(data[data['database_id']!='*']),' matching sequences')
-    
     # find best matches
     print('Finding best matches')
-    data = get_best_matches(data, metric)
-    if args.all==False:
-        data = data[data['rank'] == 0]
-        data = data.drop(columns = ['rank'])
-    print('Found ',len(data),'matches')
-    
+    if args.all:
+        data = get_best_matches(data, metric)
+    elif args.aligner=='minimap2':
+        data = bpy.remove_overlaps(data, metric='AS', thresh=20)
+        x = data.groupby(by=['query_id']).agg({'query_id':'count'}).rename(columns={'query_id':'count'}).reset_index()
+        # flag chimeras
+        x['chimeric'] = x['count'] > 1
+        print('Found',np.sum(x['chimeric']),'chimeric sequences')
+        data = data.merge(x[['query_id','chimeric']], on='query_id', how='left')
+    print('Found',len(data),'matches')
     # print results summary
     print(len(A['id']) - len(np.unique(data['query_id'])), 'unmatched')
-    
     # save the data
-    print('Saving data to ', args.acc_file)
+    print('Saving data to',args.acc_file)
     data.to_csv(args.acc_file, index=False, compression='infer')
-    print('Elapse = ',time.time()-start)
+    print('Elapse=',time.time()-start)
 
 if __name__ == "__main__":
     main()

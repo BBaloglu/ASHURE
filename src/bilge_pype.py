@@ -846,7 +846,7 @@ def remove_overlaps(frags, metric='AS', thresh=0):
 
 def get_best(df, col, metric='AS', stat='idxmax'):
     df=df.reset_index(drop=True)
-    idx = df.groupby(by = col).agg({metric:stat}).reset_index()
+    idx = df.groupby(by=col).agg({metric:stat}).reset_index()
     return df.iloc[idx[metric].values]
 
 def run_msa(MSA_infiles, aligner='spoa', config='-l 0 -r 2', thread_lock=True):
@@ -881,7 +881,7 @@ def run_msa(MSA_infiles, aligner='spoa', config='-l 0 -r 2', thread_lock=True):
             MSA_outfile = msa_in + '.out'
             f = open(MSA_outfile, 'w') # open file for writing std out
             cmd+= aligner+' '+config+' '+msa_in+' > '+MSA_outfile+' & '
-        subprocess.call(cmd[:-3], shell = True) # submit the job
+        subprocess.run(cmd[:-3], shell = True) # submit the job
 
 def read_spoa(fname):
     '''
