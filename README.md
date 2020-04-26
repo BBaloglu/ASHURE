@@ -1,38 +1,64 @@
+# Getting started
+```bash
+echo write me write me write me write me write me i am a lazy bastard
+```
+
 # ASHURE
-A Sure Heuristic under Random events - Python script for analysis of metabarcoding data with Nanopore sequencing.
+A Sure Heuristic under Random events - A Python based toolkit for analysis of metagenomic data from nanopore sequencing.
 
-ASHURE is a metagenome analysis tool for linear consensus or 1d2 like fastq data from nanopore sequencing devices. A library preparation procedure such as rolling circle amplification (RCA) generates ssDNA containing repeats of their originating template. When read by a nanopore sequencing device, these highly errored but repetative reads can be realigned to generate a more error free consensus.
+ASHURE is designed for analysis of linear consensus or 1d2 like fastq data from nanopore sequencing devices. A library preparation procedure such as rolling circle amplification (RCA) generates ssDNA containing repeats of their originating template. When read by a nanopore sequencing device, these highly errored but repetative reads can be realigned to generate a more error free consensus.
 
-ASHURE works by leveraging priori information such as a reference database of related sequences, primer information, and amplicon size to find, align, and generate a polished consensus read. Reference sequences do not have to match the amplicon. They just have to be similar enough (70-80 percent identity) for fuzzy kmer based aligners to work. If reference sequences are not available, primer information can be used to generate a pseudo reference database for the search.
+ASHURE works by leveraging priori information about the amplicon such as primers used, reference database of related sequences, and amplicon size to find, align, and generate a polished consensus read. Reference sequences do not have to match the amplicon. They just have to be similar enough (70-80 percent identity) for fuzzy kmer based aligners to work.
 
-Generally, the sensitivity and speed of the pipeline will be dependent on the quality of the reference or pseudo reference used. A large library of reference sequences will result in slow search speed. A reference database of wholly unrelated sequences will result in zero hits. For the best results, you should curate a compact and accurate database of reference sequences relevant to your raw fastq data. The tools and steps for generating a good pseudo reference are shown in the jupyter notebooks.
+Generally, the sensitivity and speed of the pipeline will be dependent on the quality of the reference or pseudo reference used. A large library of reference sequences will result in slow search speed. A reference database of wholly unrelated sequences will result in zero hits. For the best results, you should curate a compact but accurate database of reference sequences relevant to your raw fastq data. The tools and steps for generating a good pseudo reference sequences are shown in [pseudo_references.ipynb](https://github.com/bbaloglu/ashure/demos/pseudo_references.ipynb).
 
-In metagenome analysis, a major challenge is the presence of novel sequences in a sample. Sequencing errors are hard to distinguish from novel sequences because both are unique. For unknown error profiles such as consensus reads from nanopore sequencing, our best guess is through density based clustering. If a novel sequence exists, you would expect a uniform cloud of sequencing errors around the true sequence.
+For metagenome analysis, de novo sequence clusters are generated in the last step of the pipeline using an adaptive density based clustering approach called OPTICS. Traditional OTU thresholding approaches do not work with nanopore data because error profile is highly variable and subject to sequence identity of the amplicons. Density based clustering is advantageous because it can adaptively call OTU boundaries based on the divergence in local sequence identity. The error profile of the sequencing device does not need to be fully understood for this clustering approach to work. You just need enough read coverage around a true amplicon for you to detect novel clusters. A demo of this approach can be found in [clustering.ipynb](https://github.com/bbaloglu/ashure/demos/clustering.ipynb)
+
+Finally, read polishing can be done with medaka, nanopolish, or racon pipelines. We do not implement these in our code as installation of some of these packages is rather complicated for the end user. We already get good results via clustering find these further steps unneccessary. However, if you wish, our toolkit can prepare the relevant input data for these polishing tools. A demo of this process with racon is shown in [polishing](https://github.com/bbaloglu/ashure/polishing.ipynb).
 
 ## Dependencies
 Runtime dependencies
 [minimap2](https://github.com/lh3/minimap2)
 [spoa](https://github.com/lh3/minimap2)
-[sklearn](https://scikit-learn.org/stable/install.html)
-[hdbscan]()
-[pandas]()
+[sklearn](https://github.com/scikit-learn/scikit-learn)
+[hdbscan](https://github.com/scikit-learn-contrib/hdbscan)
+[pandas](https://github.com/pandas-dev/pandas)
 
 Numpy, Scipy, Pandas, and Sklearn can be installed via follow commands for pip
+
 ```bash
 pip install pandas
 pip install scikit-learn
 pip install hdbscan
 ```
 
-The relevant install instructions or binaries for spoa and minimap2 can be found that their respective github pages.
+The install instructions for spoa and minimap2 can be found that their respective github pages. If you download or compile these binaries without installing them to /usr/bin/, then do the following to add the binaries to your local path.
+
+In Mac OSX
+
+```bash
+mv minimap2 /Users/username/.local/bin
+export PATH=$PATH':/Users/username/.local/bin'
+```
+
+In linux
+```bash
+mv minimap2 /home/username/.local/bin
+export PATH=$PATH':/home/username/.local/bin'
+```
+
+In windows
+```bash
+echo haha fuck me. I use microsoft.
+```
 
 Optional dependences
 Wrappers for the following aligners are available in bilge_pype.py as long as they are callable from your current path
-[mafft]()
-[bwa]()
-[bowtie2]()
+[mafft](https://mafft.cbrc.jp/alignment/software/source.html)
+[bwa](https://github.com/lh3/bwa)
+[bowtie2](https://github.com/BenLangmead/bowtie)
 
-The following libraries are used in jupyter notebooks for plotting the final data
+The following libraries are used in demo notebooks for data visualization
 ```bash
 pip install bokeh
 pip install seaborn
@@ -40,7 +66,20 @@ pip install matplotlib
 ```
 
 ## Installation
-Ashure is written in python and contains wrapper scripts that call a number of useful bioinformatic tools. Pandas dataframes are primarily used to organize the underlying data. These can be easy manipulated, filtered, and export as csv via jupyter notebook or ipython shell.
+Ashure is written in python and is compatible with python3.6 and above. To install, simply clone repository with the following commands.
+
+```bash
+git clone https://github.com/bbaloglu/ashure
+cd ashure
+chmod +x ashure.py      # make it executable
+ashure.py run -h        # look at the help commands
+```
+
+As long the relevant python libraries are installed, the code should work as is. Pandas dataframes are primarily used to organize the underlying data. These can be easy manipulated, filtered, and export as csv via jupyter notebook or ipython shell.
+
+For some parts of the code, run speed of vector operations can be significantly accelerated if openblas or mkl are installed.
+[benchmarks](https://markus-beuckelmann.de/blog/boosting-numpy-blas.html)
+[openblas in ubuntu](https://stackoverflow.com/questions/29979539/how-can-i-make-numpy-use-openblas-in-ubuntu#42647590)
 
 ## General Usage
 
