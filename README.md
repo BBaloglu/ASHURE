@@ -22,18 +22,11 @@ Finally, read polishing can be done with medaka, nanopolish, or racon pipelines.
 
 [spoa](https://github.com/lh3/minimap2) is used for multi-sequence alignment
 
-[sklearn](https://github.com/scikit-learn/scikit-learn) is used for clustering
-
-[pandas](https://github.com/pandas-dev/pandas) is used for organizing underlying data
-
-[hdbscan](https://github.com/scikit-learn-contrib/hdbscan) is used for clustering in jupyter notebook code
-
-
-Numpy, Scipy, Pandas, and Sklearn can be installed via follow commands for pip
+Numpy, Scipy, Pandas, and Sklearn should also be installed via the following commands for pip
 ```bash
-pip install pandas
-pip install scikit-learn
-pip install hdbscan
+pip install pandas          # for organizing underlying data
+pip install scikit-learn    # for clustering
+pip install hdbscan         # for clustering
 ```
 
 For non-python libraries such as spoa and minimap2, subprocess.run() is used by wrapper functions to make calls to these tools. These binaries should be accessible from your local path. Install instructions for spoa and minimap2 can be found on their github pages. If you download or compile these binaries without installing them to /usr/bin/, you must add them to your local path by running the following commands.
@@ -44,15 +37,18 @@ echo PATH=$PATH':/home/username/.local/bin' >> .bashrc   # updates these setting
 ```
 
 ### Optional dependences
-Wrappers for the following aligners can also be called from bilge_pype.py These tools are not used by ashure.py, but if you want to use them in your python scripts you must also make their binaries callable from your local path 
+Wrappers for the following aligners can also be called from `bilge_pype.py` These tools are not used by `ashure.py`, but if you want to use them in your python scripts you must also make their binaries callable from your local path 
+
 [mafft](https://mafft.cbrc.jp/alignment/software/source.html) for progressive multi-sequence alignment
+
 [bwa](https://github.com/lh3/bwa) is better for aligning miseq data
+
 [bowtie2](https://github.com/BenLangmead/bowtie) is better for aligning miseq data
 
 The following libraries are used in demo notebooks for data visualization
 ```bash
-pip install bokeh          # interative plots
-pip install seaborn        # pretty matplotlib plots
+pip install bokeh          # for making interative plots
+pip install seaborn        # for making pretty matplotlib plots
 ```
 
 ## Installation
@@ -64,7 +60,7 @@ chmod +x ashure.py                             # make it executable
 ashure.py run -h                               # look at the help commands
 ```
 
-ashure.py imports many functions from bilge_pype.py These should be in same folder together for the code to work. I will bilge_pype to pypi later if time permits.
+`ashure.py` imports many functions from `bilge_pype.py` These should be in same folder together for the code to work. I will bilge_pype to pypi later if time permits.
 
 If the dependencies are installed, the code should work as is. Pandas dataframes are primarily used to organize the underlying data. These can be easy manipulated, filtered, and export as csv via jupyter notebook or ipython shell.
 
@@ -97,7 +93,7 @@ subcommands allow more customization over each module of the ashure pipeline
 ```
 
 ## Library
-bilge_pype.py contains several functions you may find useful for parsing and calling commonly used alignment tools. See the [demos](https://github.com/bbaloglu/ashure/demos) folder for how some of these functiosn are used.
+`bilge_pype.py` contains several functions you may find useful for parsing and calling commonly used alignment tools. See the [demos](https://github.com/bbaloglu/ashure/demos) folder for how some of these functiosn are used.
 
 ## Contact information
 For additional information, submit help and bug reports via twitter.
