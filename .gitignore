@@ -5,6 +5,7 @@ runs/
 ref/
 basecalled_fastq/
 basecalled*/
+*.log
 *.bam
 *.sam
 *.paf
