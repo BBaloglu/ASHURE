@@ -1,0 +1,11 @@
+
+pid[215947] 2020-04-29 16:05:31.409 INFO: searching reverse primers
+pid[215947] 2020-04-29 16:05:43.245 INFO: fwd and rev primers found
+pid[215947] 2020-04-29 16:05:43.418 INFO: filtering to best aligned fragments
+pid[215947] 2020-04-29 16:05:44.203 INFO: Cleaned out 5 of 189986
+pid[215947] 2020-04-29 16:05:44.216 INFO: finding best primer match for each read
+pid[215947] 2020-04-29 16:05:45.130 INFO: 21302/98774 reads with fwd and rev primer
+pid[215947] 2020-04-29 16:05:45.131 INFO: 33071/98774 reads with only fwd primer found
+pid[215947] 2020-04-29 16:05:45.131 INFO: 24884/98774 reads with only rev primer found
+pid[215947] 2020-04-29 16:05:45.131 INFO: 19517/98774 reads with no primer matches
+pid[215947] 2020-04-29 16:05:54.896 INFO: Reference sequences found 114894
