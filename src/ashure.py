@@ -904,7 +904,7 @@ def main():
     config['clst_N']=2000
     clst_parser.add_argument('-N', dest='clst_N', type=int, help='size of sequence subsample')
     config['clst_N_iter']=10
-    clst_parser.add_argument('-iter', dest='clst_N_iter', type=str, help='number of iterations to run clustering')
+    clst_parser.add_argument('-iter', dest='clst_N_iter', type=int, help='number of iterations to run clustering')
     config['clst_pw_config']='-k15 -w10 -p 0.8 -D'
     clst_parser.add_argument('-pw_config', dest='clst_pw_config', type=str, help='config passed to minimap2')
     clst_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
