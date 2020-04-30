@@ -147,7 +147,6 @@ def annotate_reads(df):
     data = df[['query_id','q_len','q_start','q_end','t_len','t_start','t_end','orientation','AS','match_score']].values
     
     # storage variables
-    df_1D = []
     df_frag = []
     # initial variables
     N_frags = 0
@@ -159,18 +158,13 @@ def annotate_reads(df):
     match_size = 0
     match_score = []
     AS = []
-    
     # iterate on each read
     for i in range(0,len(data)):
         # count frags present
         N_frags+=1
-
         # 1D2 read inversion found
         if i+1 < len(data) and data[i,7]!=data[i+1,7] and data[i,0]==data[i+1,0]:
-            df_1D.append([data[i,0]+'_1D2num'+str(N_1D2),f_start,data[i,3]])
             N_1D2+=1
-            f_start = data[i+1,2]
-
         # q_unmapped computation by first summing mapped sequence space
         q_unmapped+= data[i,3]-data[i,2]
         # sum db coverage, match size, AS
@@ -179,20 +173,12 @@ def annotate_reads(df):
         match_size+= data[i,6]-data[i,5]
         match_score.append(data[i,9])
         AS.append(data[i,8])
-        
         # when end of read reached
         if i+1 >= len(data) or data[i,0]!=data[i+1,0]:
             # compute q_unmapped
             q_unmapped = data[i,1]-q_unmapped
-            
             # record data for df_frag
-            df_frag.append([data[i,0],N_frags,N_1D2,data[i,1],q_unmapped,
-                            db_fwd_cover,db_rev_cover,
-                            match_size,np.mean(match_score),np.mean(AS),np.std(AS)])
-            
-            # record data for df_1D2
-            df_1D.append([data[i,0]+'_1D2num'+str(N_1D2),f_start,data[i,1]])
-            
+            df_frag.append([data[i,0],N_frags,N_1D2,data[i,1],q_unmapped,db_fwd_cover,db_rev_cover,match_size,np.mean(match_score),np.mean(AS),np.std(AS)])
             # reset initial variables
             N_frags = 0
             N_1D2 = 0
@@ -203,16 +189,9 @@ def annotate_reads(df):
             match_size = 0
             match_score = []
             AS = []
-
     # format data
-    df_frag = pd.DataFrame(df_frag, columns=['query_id','N frags','1D2','q_len','q_unmapped','db_fwd_cover','db_rev_cover','match_size','avg_match','avg_AS','std_AS'])
-    df_1D = pd.DataFrame(df_1D, columns=['query_id','f_start','f_end'])
-    
-    # save the info
-    df_1D.to_csv('df_1D.csv.gz', index = False, compression = 'infer')
-    df_frag.to_csv('df_frags.csv.gz', index = False, compression = 'infer')
-
-    return df_frag
+    col = ['query_id','N frags','1D2','q_len','q_unmapped','db_fwd_cover','db_rev_cover','match_size','avg_match','avg_AS','std_AS']
+    return pd.DataFrame(df_frag, columns=col)
 
 def perform_MSA(df, frags, batch_size=100, folder='./msa/', thread_lock=True, config='-l 0 -r 2'):
     '''
@@ -223,12 +202,14 @@ def perform_MSA(df, frags, batch_size=100, folder='./msa/', thread_lock=True, co
     '''
     # make workspace folder if it does not exist
     folder = bpy.check_dir(folder)
-    # clear out the folder if anything is in it
     files = glob.glob(folder+'*')
     bpy.batch_file_remove(files)
-    
     # batch submit the jobs
     frags = frags.rename(columns={'query_id':'id'})
+    cols = ['q_len','q_start','q_end']
+    for c in cols:
+        frags[c] = frags[c].astype(int)
+    # low mem check
     if 'filename' in df.columns:
         rlist = df[df['id'].isin(frags['id'])].sort_values(by=['filename'])['id'].drop_duplicates().values
     else:
@@ -241,23 +222,21 @@ def perform_MSA(df, frags, batch_size=100, folder='./msa/', thread_lock=True, co
         reads = bpy.add_seq(df[df['id'].isin(rid)])
         data = data.merge(reads[['id','sequence','quality']], on='id', how='left')
         data = data.sort_values(by=['id','q_start']).values
-        logging.info('Writing frags to fastq files')
         MSA_infile = []
         seqlist = []
         k = 0
         for i in range(0,len(data)):
-            # for first entries, set s1 = 0
-            if i==0 or data[i,0]!=data[i-1,0]:
-                s1 = 0
-                s2 = int((data[i,3]+data[i+1,2])/2)
-            # last entry reached, s2 to end of read
-            elif i+1 >= len(data) or data[i,0]!=data[i+1,0]:
-                s1 = int((data[i,2]+data[i-1,3])/2)
-                s2 = data[i,1]
-            else:
-                s1 = int((data[i,2]+data[i-1,3])/2)
-                s2 = int((data[i,3]+data[i+1,2])/2)
-            
+            s1 = data[i,2]
+            s2 = data[i,3]
+            # if read orientations match and gaps are not big, try merging them
+            if i > 0 and data[i,4]==data[i-1,4]:
+                g1 = data[i,2] - data[i-1,3]
+                if g1*4 < data[i,3]-data[i,2]:
+                    s1 = int((data[i,2]+data[i-1,3])/2)
+            if i+1 < len(data) and data[i,4]==data[i+1,4]:
+                g2 = data[i+1,2] - data[i,3]
+                if g2*4 < data[i,3]-data[i,2]:
+                    s2 = int((data[i,3]+data[i+1,2])/2)
             # check that averaging did not create weird boundaries
             if s2 - s1 > 10:
                 # slice out the sequences
@@ -270,7 +249,6 @@ def perform_MSA(df, frags, batch_size=100, folder='./msa/', thread_lock=True, co
                 # record it
                 seqlist.append([data[i,0]+'_frag'+str(k)+'_start'+str(s1)+'_end'+str(s2), seq, q])
             k+=1
-
             # end of list or end of read reached
             if i+1 >= len(data) or data[i,0]!=data[i+1,0]:
                 if len(seqlist) > 1:
@@ -280,7 +258,6 @@ def perform_MSA(df, frags, batch_size=100, folder='./msa/', thread_lock=True, co
                 # reset the variables
                 seqlist = []
                 k = 0
-            
         # submit to spoa every 100 files or whatever batch_size is
         if len(MSA_infile) > 0:
             logging.info('MSA progress = '+str(j)+'/'+str(N_chunks))
@@ -576,19 +553,19 @@ def perform_cluster(df_q, df_d=[], max_iter=1, csize=20, N=2000, th_s=0.9, th_m=
     def eval(df_q, df_c, pw_config, workspace, best=True):
         df_align = bpy.run_minimap2(df_q, df_c, config=pw_config, cigar=True, workspace=workspace)
         if best:
-            df_align = bpy.get_best(df_align, col=['query_id'], metric='match_score', stat='idxmax')
+            df_align = bpy.get_best(df_align, col=['query_id'], metric='AS', stat='idxmax')
         cols = np.unique(df_align['database_id'])
         df_c = df_c[df_c['id'].isin(cols)]
         logging.info('perform_cluster: number of clusters = '+str(len(df_c)))
         return df_c, df_align
-
+    
     # initialize cluster centers
     if len(df_d) > 0:
         df_c = df_d
     else:
         df_c = bpy.cluster_sample(df_q, N=20, th=0.8, rsize=1, config=pw_config, workspace=workspace)
     df_c['split'] = True # refine all new centers by default
-
+    ofile_list = []
     for k in range(0, max_iter):
         logging.info('perform_cluster: iter = '+str(k)+'/'+str(max_iter))
         # sweep for rare sequences
@@ -623,7 +600,7 @@ def perform_cluster(df_q, df_d=[], max_iter=1, csize=20, N=2000, th_s=0.9, th_m=
         for i in range(0,len(squeue)):
             qout = squeue[i]
             logging.info('perform_cluster: splitting on cid='+qout+' '+str(i)+'/'+str(len(squeue)))
-            qlist = cluster_subsample(df_align, [qout], N=N, rand=True, metric='match_score')
+            qlist = cluster_subsample(df_align, [qout], N=N, rand=True)
             qlist = df_q[df_q['id'].isin(qlist)]
             cout = cluster_compute(qlist, csize, outliers=False, pw_config=pw_config, msa_config=msa_config, workspace=workspace)
             if len(cout) > 0:
@@ -656,7 +633,7 @@ def perform_cluster(df_q, df_d=[], max_iter=1, csize=20, N=2000, th_s=0.9, th_m=
         for i in range(0,len(mqueue)):
             mout = mqueue[i]
             logging.info('perform_cluster: doing merging on '+str(len(mout))+' clusters, '+str(i)+'/'+str(len(mqueue)))
-            qlist = cluster_subsample(df_align, mout, N=500, rand=False, metric='match_score')
+            qlist = cluster_subsample(df_align, mout, N=500, rand=False, metric='AS')
             qlist = df_q[df_q['id'].isin(qlist)]
             cout = cluster_compute(qlist, csize, outliers=False, pw_config=pw_config, msa_config=msa_config, workspace=workspace)
             if len(cout) > 0:
@@ -665,18 +642,19 @@ def perform_cluster(df_q, df_d=[], max_iter=1, csize=20, N=2000, th_s=0.9, th_m=
         df_c['id'] = ['cluster'+str(i) for i in range(0,len(df_c))]
         
         # track progress
-        if ofile!= '': # debug
+        if ofile!= '':
             import datetime
             ts = ''
             if timestamp:
                 ts = '_'+datetime.datetime.fromtimestamp(time.time()).strftime('%Y_%m_%d_%H_%M_%S')
             fname = ofile+'_'+str(k)+ts+'_c'+str(len(df_c))+'.csv.gz'
             df_c.to_csv(fname, index=False, compression='infer')
+            ofile_list.append(fname)
         
     logging.info('perform_cluster: complete')
-    return df_c
+    return df_c, ofile_list
 
-def cluster_subsample(df_align, dlist, N=500, rand=False, metric='match_score'):
+def cluster_subsample(df_align, dlist, N=500, rand=False, metric='AS'):
     if rand==False:
         df_align = df_align.sort_values(by=['database_id',metric])
     x = []
@@ -905,6 +883,10 @@ def main():
     clst_parser.add_argument('-N', dest='clst_N', type=int, help='size of sequence subsample')
     config['clst_N_iter']=10
     clst_parser.add_argument('-iter', dest='clst_N_iter', type=int, help='number of iterations to run clustering')
+    config['clst_iter_out'] = 'clst'
+    clst_parser.add_argument('-tout', dest='clst_iter_out', type=str, help='prefix of file to save cluster centers after each iteration')
+    config['clst_track'] = False
+    clst_parser.add_argument('--track', dest='clst_track', action='store_true', help='keep cluster centers after each iteration')
     config['clst_pw_config']='-k15 -w10 -p 0.8 -D'
     clst_parser.add_argument('-pw_config', dest='clst_pw_config', type=str, help='config passed to minimap2')
     clst_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
@@ -1093,8 +1075,12 @@ def main():
             df = df[df['fwd_primer_seq'].notna() & df['rev_primer_seq'].notna()]
 
         # refine the clusters
-        data = perform_cluster(df, max_iter=config['clst_N_iter'], csize=20, N=config['clst_N'], th_s=config['clst_th_s'], th_m=config['clst_th_m'], pw_config=config['clst_pw_config'], msa_config=config['msa_config'], workspace=config['clst_folder'], ofile='rcent', timestamp=True)
-        
+        data, flist = perform_cluster(df, max_iter=config['clst_N_iter'], csize=20, N=config['clst_N'], th_s=config['clst_th_s'], th_m=config['clst_th_m'], pw_config=config['clst_pw_config'], msa_config=config['msa_config'], workspace=config['clst_folder'], ofile=config['clst_iter_out'], timestamp=True)
+
+        # clean up if needed
+        if config['clst_track']==False:
+            bpy.batch_file_remove(flist)
+
         # save data
         logging.info('Writing clustered sequences to '+config['cout_file'])
         data.to_csv(config['cout_file'], index=False, compression='infer')

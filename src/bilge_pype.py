@@ -1022,7 +1022,7 @@ def find_endgap(seq):
             break
     return [s1,s2]
 
-def get_pairwise_distance(seq, block=500, output_folder='./pairwise_dist/', workspace='./pw_aligner/', config='-k15 -w10 -PD', symmetric=False):
+def get_pairwise_distance(seq, block=500, output_folder='./pairwise_dist/', workspace='./pw_aligner/', config='-k15 -w10 -PD', symmetric=False, cleanup=False):
     '''
     Function to compute pairwise distance matrix of a list of sequences
     seq = pandas dataframe of a list of sequences with columns [id, sequence]
@@ -1064,11 +1064,14 @@ def get_pairwise_distance(seq, block=500, output_folder='./pairwise_dist/', work
             logging.info('processing block '+str(i)+','+str(j)+' '+str(count)+'/'+str(N))
             count+=1
             out = run_minimap2(df[j], df[i], config = config, workspace = workspace, 
-                               cigar = True, build_index = build_index, use_index = True)
+                               cigar = True, build_index = build_index, use_index = True, cleanup=False)
             build_index = False
             fname = output_folder+'dst_'+str(i)+'_'+str(j)+'.csv.gz'
             out.to_csv(fname, index=False, compression='infer')
             data.append(fname)
+    # cleanup the workspace folder
+    if cleanup:
+        subprocess.run(['rm','-r',workspace])
     return data
 
 def get_feature_vector(df, d_dct=None, q_dct=None, symmetric=False):
