@@ -668,7 +668,7 @@ def cluster_subsample(df_align, dlist, N=500, rand=False, metric='AS'):
         x+= [q for q in qlist]
     return np.unique(x)
 
-def cluster_compute(df_q, csize=20, outliers=False, pw_config ='-k15 -w10 -D', msa_config='', workspace='./clust_run/'):
+def cluster_compute(df_q, csize=20, metric='match_score', outliers=False, pw_config ='-k15 -w10 -D', msa_config='', workspace='./clust_run/'):
     '''
     Find cluster centers for a set of sequence data
     qry = dataframe of query sequences to search for cluster centers.
@@ -688,7 +688,7 @@ def cluster_compute(df_q, csize=20, outliers=False, pw_config ='-k15 -w10 -D', m
         if outliers:
             return df_q[['id','sequence']]
         return []
-    # compute pairwise similarity --> slower but more accurate
+    # compute pairwise --> slower but more accurate
     logging.info('cluster_compute: computing pairwise distance matrix')
     files = bpy.get_pairwise_distance(df_q, block=500, output_folder=workspace, workspace=workspace, config=pw_config, symmetric=True)
     df = pd.concat([pd.read_csv(f) for f in files])
@@ -699,8 +699,7 @@ def cluster_compute(df_q, csize=20, outliers=False, pw_config ='-k15 -w10 -D', m
         if outliers:
             return df_q[['id','sequence']]
         return []
-    metric = 'match_score'
-    df = bpy.get_best(df, ['query_id','database_id'], metric)
+    df = bpy.get_best(df, ['query_id','database_id'], 'AS')
     df = bpy.get_feature_vector(df[['query_id','database_id',metric]], symmetric=True)
     df = bpy.get_symmetric_matrix(df, sym_larger=False)
     # convert to distance
@@ -708,10 +707,9 @@ def cluster_compute(df_q, csize=20, outliers=False, pw_config ='-k15 -w10 -D', m
     for i in range(0,len(df)):
         df.iloc[:,i] = 1-df.iloc[:,i]
         df.iat[i,i] = 0
-    
     # do optics on raw data
     logging.info('cluster_compute: running optics')
-    df_clst = bpy.cluster_OPTICS(df, metric='precomputed', alt_label = True)
+    df_clst = bpy.cluster_OPTICS(df, metric='precomputed', alt_label=True)
     df_clst = df_clst.merge(df_q, on='id', how='left')
     df_o = df_clst[df_clst['cluster_id'] == -1]
     df_i = df_clst[df_clst['cluster_id'] > -1]

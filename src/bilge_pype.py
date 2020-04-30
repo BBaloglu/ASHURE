@@ -161,9 +161,8 @@ def add_seq(df):
                     f.seek(y[i,3])
                     q = f.read(y[i,4])
                     data.append([seq, q])
-        data = np.array(data)
-        df['sequence'] = data[:,0]
-        df['quality'] = data[:,1]
+        df['sequence'] = [i[0] for i in data]
+        df['quality'] = [i[1] for i in data]
         cols = ['seek1','seek2','rlen','filename']
         df = df.drop(columns=cols)
     else:
@@ -178,7 +177,6 @@ def add_seq(df):
                     seq = f.read(y[i,3])
                     seq = seq.replace('\n','')
                     data.append(seq)
-        data = np.array(data)
         df['sequence'] = data
         cols = ['seek1','rlen','filename']
         df = df.drop(columns=cols)
@@ -915,85 +913,6 @@ def batch_file_remove(files):
                 cmd.append(fname)
             subprocess.run(cmd)
     
-def get_qual_consensus(msa_out):
-    # loads sequence info
-    msa_in = msa_out.split('.out')[0]
-    [cons, seq] = read_spoa(msa_out)
-    
-    # loads phred info and adds gaps
-    x = read_fastq(msa_in)
-    phred = x['quality'].values
-    pgap = []
-    for i in range(0,len(seq)):
-        temp = phred_gap(seq[i],phred[i]) # add gaps to phred string 
-        pgap.append(phred_ascii_to_int(temp)) # translate phred ascii to integer quality score
-    pgap = np.transpose(pgap)
-    
-    lets = ['A','T','G','C','-']
-    p1 = np.zeros([len(seq[0]),5])
-    p2 = np.zeros([len(seq[0]),5])
-    p3 = np.zeros([len(seq[0]),5])
-    p4 = np.zeros([len(seq[0]),5])
-    
-    for j in range(0,len(seq)):
-        s = np.array([k for k in seq[j]])
-        for i in range(0,len(lets)):
-            # compute prod of P(not A | A_i)
-            p1[:,i]+=pgap[:,j]*(s==lets[i])
-            # compute prod of P(A | A_i) = 1 - P(not A | A_i )
-            p2[:,i]-=np.log10(1-10**(-pgap[:,j]/10))/10*(s==lets[i])
-            # compute prod of P(not A | C_i) = 1 - P(not C | C_i)/4
-            p3[:,i]-=np.log10(1-0.25*10**(-pgap[:,j]/10))/10*(s!=lets[i])
-            # compute prod of P(A | C_i) = P(not C | C_i)/4
-            p4[:,i]+=(pgap[:,j]-10*np.log10(0.25))*(s!=lets[i])
-
-    # get P(A | AAACC)
-    x = 10**(-(p1+p3)/10)
-    y = 10**(-(p2+p4)/10)
-    z = y/(x+y)
-    
-    # P(gap | AAACC) = 1 - P(A or C or G or T | AAACC)
-    
-    
-    # find max and set as value
-    idx = np.argmax(z, axis=1)
-    out = ''.join([lets[i] for i in idx])
-    phred = np.zeros(len(idx))
-    for i in range(0,len(idx)):
-        phred[i] = z[i,idx[i]]
-
-    # count blank space
-    blk = np.zeros(len(seq[0]))
-    for i in seq:
-        s = np.array([k for k in i])
-        blk+= (s=='-')
-
-    # count agreement
-    agree = np.zeros(len(seq[0]))
-    x = []
-    for s in seq:
-        x.append([i for i in s])
-    x = np.array(x)
-    
-    for i in range(0,len(idx)):
-        agree[i] = np.sum(x[:,i]==lets[idx[i]])
-    
-    avg_agree = np.mean(agree)
-    std_agree = np.std(agree)
-    avg_blk = np.mean(blk)
-    std_blk = np.std(blk)
-    
-    phred = np.array(phred)
-    error = np.sum(1-phred)
-    avg = np.mean(1-phred)
-    stdev = np.std(1-phred)
-
-    phred = np.round(np.log10(1-phred)*-10)    
-    phred[phred>93] = 93
-
-    phred = [chr(int(i)+33) for i in phred]
-    return out, ''.join(phred), avg, stdev, error, avg_agree, std_agree, avg_blk, std_blk
-
 def phred_ascii_to_int(x):
     # Translate phred ASCII to quality integers
     return [ord(i)-33 for i in x]
@@ -1039,7 +958,7 @@ def get_pairwise_distance(seq, block=500, output_folder='./pairwise_dist/', work
     df = seq.copy()
     # sort it by longest sequence first
     if symmetric:
-        L = np.array([len(s) for s in df['sequence']])
+        L = [len(s) for s in df['sequence']]
         s = np.argsort(L)[::-1]
         df = df.iloc[s]
     
@@ -1335,8 +1254,7 @@ def cluster_HDBSCAN(df, metric='euclidean', min_cluster_size=100, min_samples=No
     df['outlier_score'] = df['outlier_score'].astype(float)
     return df
 
-def cluster_OPTICS(df, metric='euclidean', min_samples=None, min_cluster_size=None, xi=0.05,
-                   max_eps=None, cluster_method='dbscan', n_jobs=None, alt_label=False):
+def cluster_OPTICS(df, metric='euclidean', min_samples=None, min_cluster_size=None, xi=0.05, max_eps=None, cluster_method='dbscan', n_jobs=None, alt_label=False):
     '''
     Function to perform optics via sklearn library implementation
     df = data frame containing columns [id, d_i..., d_n]    
@@ -1835,8 +1753,7 @@ def mpl_violin(ax, data, groups=None, vert=False, alpha=0.5,
     for i in range(0,len(d)):
         if len(d[i][1]) > 1:
             x = np.array(d[i][1]).astype(float)
-            parts = ax.violinplot([x], positions = [i], vert=vert,
-                                  showmeans=False, showmedians=False, showextrema=False)
+            parts = ax.violinplot([x], positions = [i], vert=vert, showmeans=False, showmedians=False, showextrema=False)
             # coloring for the violin
             for pc in parts['bodies']:
                 pc.set_facecolor(face_color)
