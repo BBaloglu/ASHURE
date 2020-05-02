@@ -12,17 +12,17 @@
 ```
 
 # ASHURE
-A Sure Heuristic under Random events - A Python based toolkit for analysis of metagenomic data from nanopore sequencing.
+A Sure Heuristic under Random events - A Python based toolkit for analysis of environmental DNA from nanopore sequencing.
 
-ASHURE is designed for analysis of linear consensus or 1d2 like fastq data from nanopore sequencing devices. A library preparation procedure such as rolling circle amplification (RCA) generates ssDNA containing repeats of their originating template. When read by a nanopore sequencing device, these highly errored but repetative reads can be realigned to generate a more error free consensus.
+ASHURE is designed for analysis of linear consensus or 1d2 like fastq data from nanopore sequencing devices. Library preparation procedure such as rolling circle amplification (RCA) generate ssDNA containing repeats of their originating template. When these concatemers are read by a nanopore sequencing device, the repetative regions can be realigned to generate a more error free consensus.
 
-ASHURE works by leveraging priori information about the amplicon such as primers used, reference database of related sequences, and amplicon size to find, align, and generate a polished consensus read. Reference sequences do not have to match the amplicon. They just have to be similar enough (70-80 percent identity) for fuzzy kmer based aligners to work.
+ASHURE works by leveraging priori information about the amplicon such as primers used, reference database of related sequences, and amplicon size to find, align, and generate a polished consensus read. Reference sequences do not have to match the amplicon, just similar enough (70-80 percent identity) for fuzzy kmer based alignment.
 
-Generally, the sensitivity and speed of the pipeline will be dependent on the quality of the reference or pseudo reference used. A large library of reference sequences will result in slow search speed. A reference database of wholly unrelated sequences will result in zero hits. For the best results, you should curate a compact but accurate database of reference sequences relevant to your raw fastq data. The tools and steps for generating a good pseudo reference sequences are shown in [pseudo_references.ipynb](https://github.com/bbaloglu/ashure/demos/pseudo_references.ipynb).
+The sensitivity and speed of the pipeline is dependent on the quality of the reference or pseudo reference used. Searching large libraries will take time and compute effort is sometimes wasted on comparing against unrelated or redundant sequences. A bad reference sequences will result in poor alignments that contaminate multi-alignment. The best results are obtain by searching  against a compact but accurate database of reference sequences relevant to your raw fastq data. The tools and steps for generating good pseudo reference sequences are shown in [pseudo_references.ipynb](https://github.com/bbaloglu/ashure/demos/pseudo_references.ipynb).
 
-For metagenome analysis, de novo sequence clusters are generated in the last step of the pipeline using an adaptive density based clustering approach called OPTICS. Traditional OTU thresholding approaches do not work with nanopore data because error profile is highly variable and subject to sequence identity of the amplicons. Density based clustering is advantageous because it can adaptively call OTU boundaries based on the divergence in local sequence identity. The error profile of the sequencing device does not need to be fully understood for this clustering approach to work. You just need enough read coverage around a true amplicon for you to detect novel clusters. A demo of this approach can be found in [clustering.ipynb](https://github.com/bbaloglu/ashure/demos/clustering.ipynb)
+Sequence clusters are generated in the last step of the pipeline using a density based clustering approach called OPTICS. Traditional OTU thresholding approaches do not work with nanopore data because the error profile of each read is unpredictable. Density based clustering is more suited for these situations because OTU boundaries are adaptively called based on the divergence in local sequence identity. This method requires sufficient coverage around a true amplicon for clustering to work. An interative demo of how this approach works can be found in [clustering.ipynb](https://github.com/bbaloglu/ashure/demos/clustering.ipynb).
 
-Finally, read polishing can be done with medaka, nanopolish, or racon pipelines. We do not implement these in our code as installation of some of these packages is rather complicated for the end user. We already get good results via clustering find these further steps unneccessary. However, if you wish, our toolkit can prepare the relevant input data for these polishing tools. A demo of this process with racon is shown in [polishing](https://github.com/bbaloglu/ashure/polishing.ipynb).
+Read polishing with medaka, nanopolish, or racon is supported by our pipeline. Our toolkit only prepares input data for these tools. A demo of this process is shown in [polishing](https://github.com/bbaloglu/ashure/polishing.ipynb).
 
 ## Dependencies
 ### Runtime dependencies
@@ -58,14 +58,15 @@ pip install seaborn        # for making pretty matplotlib plots
 ```
 
 ## Installation
-Ashure is written in python and is compatible with python3.6 and above. To install, run the following commands.
+Ashure is written in python and is compatible with python3.6 and above. The following commands will install `ashure.py` to your local path.
 ```bash
-git clone https://github.com/bbaloglu/ashure   # clones this repository
-cd ashure                                      # enter the repository folder
-chmod +x ashure.py                             # make it executable
-ashure.py run -h                               # look at the help commands
-mv ashure.py ~/.local/bin/ashure               # adds ashure to local path
-mv bilge_pype.py ~/.local/bin/                 # adds bilge_pype module to local path with ashure
+git clone https://github.com/bbaloglu/ashure  # clones this repository
+cd ashure                                     # enter the repository folder
+chmod +x ashure.py                            # make it executable
+./ashure.py run -h                            # look at the help commands
+mv ashure.py ~/.local/bin/ashure              # adds ashure to local path
+mv bilge_pype.py ~/.local/bin/                # adds bilge_pype module to local path with ashure
+ashure -h                                     # call ashure from local path
 ```
 
 `ashure.py` imports many functions from `bilge_pype.py` These should be in same folder together for the code to work. I will bilge_pype to pypi later if time permits.
@@ -79,43 +80,41 @@ For some parts of the code, run speed of vector operations can be accelerated if
 [how to install](https://stackoverflow.com/questions/29979539/how-can-i-make-numpy-use-openblas-in-ubuntu#42647590) shows a quick guide to enabling openblas on ubuntu. Google is your best friend here.
 
 ## General Usage
-General usage of ashure is as following:
-
+The whole pipeline or subsets of the pipeline can be run in sequence with the `run` module
 ```bash
 ./ashure.py run -fq fastq/*.fastq -p primers.csv -o1 cons.csv                   # runs full pipeline with default parameters
 ./ashure.py run -fq fastq/*.fastq -p primers.csv -o1 cons.csv -c config.json    # runs full pipeline with custom parameters 
-
 ./ashure.py run -fq fastq/*.fastq -p primers.csv -o1 cons.csv -r prfg           # runs only pseudo reference generator
 ./ashure.py run -fq fastq/*.fastq -db ref_db.fa -o1 cons.csv -r fgs             # runs only fragment search with ref_db.fa sequences
-
 # runs only pseudo reference generator, fragment search, and multi-sequence alignment with default parameters
 ./ashure.py run -fq fastq/*.fastq -p primers.csv -o1 cons.csv -r prfg,fgs,msa
 ```
 
-subcommands allow more customization over each module of the ashure pipeline.
-
-Example usage from pseudo reference generator module
+The list of submodules can be found with
 ```bash
-./ashure.py prfg -h                                                               # prints help
-./ashure.py prfg -fq folder/*.fq -p primers.csv -o sequences.csv -r               # runs the module
-./ashure.py prfg -fq folder/*.fq -p primers.csv -o sequences.csv -fs 500-3000 -r  # runs the module with fastq filter for 500-3000bp
-./ashure.py prfg -fq folder/*.fq -p primers.csv -o sequences.csv -fs 500-3000 -c config.json  # updates config.json with custom parameters
-
+./ashure.py -h
 ```
 
-Example usage from clustering module
+Example usage from the pseudo reference generator module
+```bash
+./ashure.py prfg -h                                                         # prints help
+./ashure.py prfg -fq folder/*.fq -p primers.csv -o seq.csv -r               # runs the module
+./ashure.py prfg -fq folder/*.fq -p primers.csv -o seq.csv -fs 500-3000 -r  # runs the module with fastq filter for 500-3000bp
+./ashure.py prfg -fq folder/*.fq -p primers.csv -o seq.csv -fs 500-3000 -c config.json  # updates config.json with custom parameters
+```
+
+Example usage from the clustering module
 ```bash
 ./ashure.py clst -h                                           # prints help
 ./ashure.py clst -i input.csv -o clusters.csv -r              # runs clustering
 ./ashure.py clst -i input.csv -o clusters.csv -c config.json  # updates config.json with custom parameters
-
 ```
 
 ## Library
 `bilge_pype.py` contains several functions you may find useful for parsing and calling commonly used alignment tools. See the [demos](https://github.com/bbaloglu/ashure/demos) folder for how some of these functiosn are used.
 
 ## Contact information
-For additional information, submit help and bug reports via twitter.
+Submit help and bug reports to me via twitter.
 
 Follow and tweet to: [@bilgeMolEcol](https://twitter.com/bilgeMolEcol)
 
