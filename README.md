@@ -5,11 +5,10 @@
 ./ashure.py run -fq folder/*.fq -p primers.csv -o consensus.csv -r  # runs everything with default parameters
 ./ashure.py run -c config.json                                      # writes parameters to config.json
 ./ashure.py run -fq folder/*.fq -c config.json -r                   # loads parameters from config.json and run everything
-
-./ashure.py prfg -fq folder/*.fq -p primers.csv -o sequences.csv -r           # runs prfg module
-./ashure.py clst -i sequences.csv -o clusters.csv -iter 10 -r                 # runs clst module for 10 iterations
-./ashure.py run -fq folder/*.fq -db clusters.csv -o consensus.csv -r          # runs everything with clusters.csv as reference
-./ashure.py run -fq folder/*.fq -db clusters.csv -o cons.csv -r fgs,msa,cons  # runs fgs, msa, cons modules only 
+./ashure.py prfg -fq folder/*.fq -p primers.csv -o seq.csv -r           # runs prfg module
+./ashure.py clst -i seq.csv -o cl.csv -iter 10 -r                       # runs clst module for 10 iterations
+./ashure.py run -fq folder/*.fq -db cl.csv -o consensus.csv -r          # runs everything with clusters.csv as reference
+./ashure.py run -fq folder/*.fq -db cl.csv -o cons.csv -r fgs,msa,cons  # runs fgs, msa, and cons modules only 
 ```
 
 # ASHURE
