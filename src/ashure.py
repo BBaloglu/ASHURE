@@ -536,8 +536,7 @@ def trim_consensus(df_pmatch, df_cons):
     return df.merge(df_cons[['id','N frags','msa_input_file']])
     #return df.merge(df_cons[['id','N frags']])
 
-def perform_cluster(df_q, df_d=[], max_iter=1, csize=20, N=2000, th_s=0.9, th_m=0.5, pw_config='', msa_config='', workspace='./cluster/',
-                    ofile='', timestamp=True):
+def perform_cluster(df_q, df_d=[], max_iter=1, csize=20, N=2000, th_s=0.9, th_m=0.5, pw_config='', msa_config='', workspace='./cluster/', track_file='', timestamp=True):
     '''
     Refines the cluster centers for a set of sequence data
     df_q = dataframe of query sequences to search for cluster centers.
@@ -550,117 +549,126 @@ def perform_cluster(df_q, df_d=[], max_iter=1, csize=20, N=2000, th_s=0.9, th_m=
     N = size of the random sample to compute pairwise distance data with
     workspace = workspace folder for the aligner
     '''
-    def eval(df_q, df_c, pw_config, workspace, best=True):
-        df_align = bpy.run_minimap2(df_q, df_c, config=pw_config, cigar=True, workspace=workspace)
-        if best:
-            df_align = bpy.get_best(df_align, col=['query_id'], metric='AS', stat='idxmax')
-        cols = np.unique(df_align['database_id'])
-        df_c = df_c[df_c['id'].isin(cols)]
-        logging.info('perform_cluster: number of clusters = '+str(len(df_c)))
-        return df_c, df_align
-    
     # initialize cluster centers
     if len(df_d) > 0:
         df_c = df_d
     else:
         df_c = bpy.cluster_sample(df_q, N=20, th=0.8, rsize=1, config=pw_config, workspace=workspace)
     df_c['split'] = True # refine all new centers by default
-    ofile_list = []
+    track_file_list = []
     for k in range(0, max_iter):
         logging.info('perform_cluster: iter = '+str(k)+'/'+str(max_iter))
-        # sweep for rare sequences
-        logging.info('perform_cluster: sweeping for rare sequences')
-        df_c, df_align = eval(df_q, df_c, pw_config, workspace, best=True)
-        
-        p = np.percentile(df_align['match_score'].values, 5)
-        c = df_align['match_score'] > p
-        uncover = set(df_q['id'].astype(str)) - set(df_align[c]['query_id'].astype(str))
-        logging.info('perform_cluster: match_score < '+str(p)+' uncovered '+str(len(uncover))+'/'+str(len(df_q)))
-        if len(uncover) > 0:
-            uncover = df_q[df_q['id'].isin([i for i in uncover])]
-            cout = bpy.cluster_sample(uncover, N=100, th=0.8, rsize=1, config=pw_config, workspace=workspace)
-            cout['split'] = True
-            df_c = df_c.append(cout[['id','sequence','split']])
-            df_c['id'] = ['cluster'+str(i) for i in range(0,len(df_c))]
-        
-        # do splitting 
-        logging.info('perform_cluster: splitting clusters based on threshold = '+str(th_s))
-        df_c, df_align = eval(df_q, df_c, pw_config, workspace, best=True)
-        # mark clusters to split
-        squeue = []
-        for cid, split in df_c[['id','split']].values:
-            v = df_align[df_align['database_id']==cid]['match_score'].values
-            p = np.percentile(v, 25)
-            if p < th_s or split:
-                logging.info('perform_cluster: cid='+cid+' p='+str(p)+' N='+str(len(v)))
-                squeue.append(cid)
-        # do the split
-        keep = set(df_c['id'].astype(str)) - set(squeue)
-        df_c = df_c[df_c['id'].isin([i for i in keep])]
-        for i in range(0,len(squeue)):
-            qout = squeue[i]
-            logging.info('perform_cluster: splitting on cid='+qout+' '+str(i)+'/'+str(len(squeue)))
-            qlist = cluster_subsample(df_align, [qout], N=N, rand=True)
-            qlist = df_q[df_q['id'].isin(qlist)]
-            cout = cluster_compute(qlist, csize, outliers=False, pw_config=pw_config, msa_config=msa_config, workspace=workspace)
-            if len(cout) > 0:
-                cout['split']=False
-                df_c = df_c.append(cout)
-        df_c['id'] = ['cluster'+str(i) for i in range(0,len(df_c))]
-
-        # merge redundant clusters
-        logging.info('perform_cluster: merging clusters')
-        df_c, df_align = eval(df_q, df_c, pw_config, workspace, best=False)
-        # get the cosimilarity matrix
-        vec = bpy.get_feature_vector(df_align[['query_id','database_id','AS']])
-        cols = vec.columns[vec.columns!='id']
-        x = vec[cols].values
-        cosim = bpy.dist_cosine(x.T, x.T)
-        cosim = pd.DataFrame(cosim, columns=cols)
-        cosim['id'] = cols
-
-        df_clst = bpy.cluster_hierarchical(cosim, metric='precomputed', linkage='complete', thresh=th_m)
-        # clusters not to perform merge
-        c = df_clst['cluster_id']== -1
-        df_c = df_c[df_c['id'].isin(df_clst[c]['id'])]
-        mqueue = []
-        # extract clusters to merge
-        for cid in np.unique(df_clst[~c]['cluster_id']):
-            x = df_clst[df_clst['cluster_id'] == cid]['id'].values
-            mqueue.append([j for j in x])
-        logging.info('perform_cluster: '+str(np.sum(~c))+'/'+str(len(df_c))+' clusters to merge')
-        #df_align = get_best(df_align, ['query_id'], 'match_score')
-        for i in range(0,len(mqueue)):
-            mout = mqueue[i]
-            logging.info('perform_cluster: doing merging on '+str(len(mout))+' clusters, '+str(i)+'/'+str(len(mqueue)))
-            qlist = cluster_subsample(df_align, mout, N=500, rand=False, metric='AS')
-            qlist = df_q[df_q['id'].isin(qlist)]
-            cout = cluster_compute(qlist, csize, outliers=False, pw_config=pw_config, msa_config=msa_config, workspace=workspace)
-            if len(cout) > 0:
-                cout['split']=True
-                df_c.append(cout)
-        df_c['id'] = ['cluster'+str(i) for i in range(0,len(df_c))]
-        
+        df_c = cluster_sweep(df_q, df_c, pw_config, workspace)
+        df_c = cluster_split(df_q, df_c, th_s, N, csize, pw_config, msa_config, workspace)   
+        df_c = cluster_merge(df_q, df_c, th_m, N, csize, pw_config, msa_config, workspace)
         # track progress
-        if ofile!= '':
+        if track_file!= '':
             import datetime
             ts = ''
             if timestamp:
                 ts = '_'+datetime.datetime.fromtimestamp(time.time()).strftime('%Y_%m_%d_%H_%M_%S')
-            fname = ofile+'_'+str(k)+ts+'_c'+str(len(df_c))+'.csv.gz'
+            fname = track_file+ts+'_i'+str(k)+'_c'+str(len(df_c))+'.csv.gz'
             df_c.to_csv(fname, index=False, compression='infer')
-            ofile_list.append(fname)
-        
+            track_file_list.append(fname)
+    # do one more merge
+    df_c = cluster_merge(df_q, df_c, th_m, N, csize, pw_config, msa_config, workspace)
     logging.info('perform_cluster: complete')
-    return df_c, ofile_list
+    return df_c, track_file_list
 
-def cluster_subsample(df_align, dlist, N=500, rand=False, metric='AS'):
-    if rand==False:
-        df_align = df_align.sort_values(by=['database_id',metric])
+def cluster_eval(df_q, df_c, pw_config, workspace):
+        df_align = bpy.run_minimap2(df_q, df_c, config=pw_config, cigar=True, workspace=workspace)
+        cols = np.unique(df_align['database_id'])
+        df_c = df_c[df_c['id'].isin(cols)]
+        logging.info('perform_cluster: number of clusters = '+str(len(df_c)))
+        return df_c, df_align
+
+def cluster_sweep(df_q, df_c, pw_config, workspace):
+    df_c, df_align = cluster_eval(df_q, df_c, pw_config, workspace)
+    # get list of things that aligned
+    p = np.percentile(df_align['similarity_L'],5)
+    logging.info('cluster_sweep: similarity_L > '+str(p))
+    c = df_align['similarity_L'] > p
+    uncover = set(df_q['id'].astype(str)) - set(df_align[c]['query_id'].astype(str))
+    logging.info('cluster_sweep: uncovered '+str(len(uncover))+'/'+str(len(df_q)))
+    if len(uncover) > 0:
+        uncover = df_q[df_q['id'].isin([i for i in uncover])]
+        cout = bpy.cluster_sample(uncover, N=100, th=0.8, rsize=1, config=pw_config, workspace=workspace)
+        cout['split'] = True
+        df_c = df_c.append(cout[['id','sequence','split']])
+        df_c['id'] = ['cluster'+str(i) for i in range(0,len(df_c))]
+    return df_c 
+
+def cluster_split(df_q, df_c, th_s, N, csize, pw_config, msa_config, workspace):
+    logging.info('cluster_split: splitting clusters based on threshold = '+str(th_s))
+    df_c, df_align = cluster_eval(df_q, df_c, pw_config, workspace)
+    df_a = bpy.get_best(df_align,['query_id'],metric='AS',stat='idxmax')
+    # mark clusters to split
+    squeue = []
+    for cid, split in df_c[['id','split']].values:
+        v = df_a[df_a['database_id']==cid]['similarity_L'].values
+        p = np.percentile(v, 5) # debug, likely everything will get split
+        if p < th_s or split:
+            logging.info('cluster_split: cid='+cid+' p='+str(p)+' N='+str(len(v)))
+            squeue.append(cid)
+    # do the split
+    keep = set(df_c['id'].astype(str)) - set(squeue)
+    df_c = df_c[df_c['id'].isin([i for i in keep])]
+    # partition the sequences to each cluster
+    p = np.percentile(df_align['similarity_L'],50)
+    logging.info('cluster_split: partition sequences with similiartity_L > '+str(p))
+    df_align = df_align[df_align['similarity_L'] > p]
+    for i in range(0,len(squeue)):
+        qout = squeue[i]
+        logging.info('cluster_split: splitting on cid='+qout+' '+str(i)+'/'+str(len(squeue)))
+        qlist = cluster_subsample(df_align, [qout], N=N, mode='sorted')
+        qlist = df_q[df_q['id'].isin(qlist)]
+        cout = cluster_compute(qlist, csize, outliers=False, pw_config=pw_config, msa_config=msa_config, workspace=workspace)
+        # record cluster centers
+        cout['split']=False
+        df_c = df_c.append(cout[['id','sequence','split']])
+    df_c['id'] = ['cluster'+str(i) for i in range(0,len(df_c))]
+    return df_c 
+
+def cluster_merge(df_q, df_c, th_m, N, csize, pw_config, msa_config, workspace):
+    df_c, df_align = cluster_eval(df_q, df_c, pw_config, workspace)
+    # get the cosimilarity matrix
+    vec = bpy.get_feature_vector(df_align[['query_id','database_id','AS']])
+    cols = vec.columns[vec.columns!='id']
+    x = vec[cols].values
+    cosim = bpy.dist_cosine(x.T, x.T)
+    cosim = pd.DataFrame(cosim, columns=cols)
+    cosim['id'] = cols
+
+    df_clst = bpy.cluster_hierarchical(cosim, metric='precomputed', linkage='complete', thresh=th_m)
+    # clusters not to perform merge
+    c = df_clst['cluster_id']== -1
+    df_c = df_c[df_c['id'].isin(df_clst[c]['id'])]
+    mqueue = []
+    # extract clusters to merge
+    for cid in np.unique(df_clst[~c]['cluster_id']):
+        x = df_clst[df_clst['cluster_id'] == cid]['id'].values
+        mqueue.append([j for j in x])
+    # partition the sequences to each cluster
+    df_align = bpy.get_best(df_align,['query_id'],metric='AS',stat='idxmax')
+    # merge clusters
+    logging.info('cluster_merge: '+str(np.sum(~c))+'/'+str(len(df_c))+' clusters to merge')
+    for i in range(0,len(mqueue)):
+        mout = mqueue[i]
+        logging.info('cluster_merge: doing merging on '+str(len(mout))+' clusters, '+str(i)+'/'+str(len(mqueue)))
+        qlist = cluster_subsample(df_align, mout, N=100, mode='sorted', metric='AS')
+        qlist = df_q[df_q['id'].isin(qlist)]
+        cout = cluster_compute(qlist, csize, outliers=False, pw_config=pw_config, msa_config=msa_config, workspace=workspace)
+        cout['split']=True
+        df_c = df_c.append(cout[['id','sequence','split']])
+    df_c['id'] = ['cluster'+str(i) for i in range(0,len(df_c))]
+    return df_c
+
+def cluster_subsample(df_align, dlist, N=500, mode='sorted', metric='AS'):
+    df_align = df_align.sort_values(by=['database_id',metric])[::-1] # set to high value first
     x = []
     for d in dlist:
         v = df_align[df_align['database_id']==d]['query_id'].values
-        if rand:
+        if mode=='rand':
             ridx = np.random.permutation(len(v))
             qlist = v[ridx[:N]]
         else:
@@ -668,7 +676,7 @@ def cluster_subsample(df_align, dlist, N=500, rand=False, metric='AS'):
         x+= [q for q in qlist]
     return np.unique(x)
 
-def cluster_compute(df_q, csize=20, metric='match_score', outliers=False, pw_config ='-k15 -w10 -D', msa_config='', workspace='./clust_run/'):
+def cluster_compute(df_q, csize=20, metric='similarity_L', outliers=False, pw_config ='-k15 -w10 -D', msa_config='-l 0 -r 2', workspace='./clust_run/'):
     '''
     Find cluster centers for a set of sequence data
     qry = dataframe of query sequences to search for cluster centers.
@@ -686,19 +694,21 @@ def cluster_compute(df_q, csize=20, metric='match_score', outliers=False, pw_con
     if len(df_q) < 2:
         logging.warning('sample size=1, too small to do anything')
         if outliers:
-            return df_q[['id','sequence']]
-        return []
+            df_q['outlier'] = True
+            return df_q[['id','sequence','outlier']]
+        return pd.DataFrame([],columns=['id','sequence'])
     # compute pairwise --> slower but more accurate
     logging.info('cluster_compute: computing pairwise distance matrix')
-    files = bpy.get_pairwise_distance(df_q, block=500, output_folder=workspace, workspace=workspace, config=pw_config, symmetric=True)
+    files = bpy.get_pairwise_distance(df_q, block=2000, output_folder=workspace, workspace=workspace, config=pw_config, symmetric=True)
     df = pd.concat([pd.read_csv(f) for f in files])
     bpy.batch_file_remove(files) # clean up the files
     # catch error in case pairwise alignment fails
     if len(df) == 0:
         logging.warning('cluster_compute: not enough samples to cluster')
         if outliers:
-            return df_q[['id','sequence']]
-        return []
+            df_q['outlier'] = True
+            return df_q[['id','sequence','outlier']]
+        return pd.DataFrame([],columns=['id','sequence'])
     df = bpy.get_best(df, ['query_id','database_id'], 'AS')
     df = bpy.get_feature_vector(df[['query_id','database_id',metric]], symmetric=True)
     df = bpy.get_symmetric_matrix(df, sym_larger=False)
@@ -709,9 +719,10 @@ def cluster_compute(df_q, csize=20, metric='match_score', outliers=False, pw_con
         df.iat[i,i] = 0
     # do optics on raw data
     logging.info('cluster_compute: running optics')
-    df_clst = bpy.cluster_OPTICS(df, metric='precomputed', alt_label=True)
+    df_clst = bpy.cluster_OPTICS(df, metric='precomputed', alt_label=False)
     df_clst = df_clst.merge(df_q, on='id', how='left')
     df_o = df_clst[df_clst['cluster_id'] == -1]
+    df_o['outlier'] = True
     df_i = df_clst[df_clst['cluster_id'] > -1]
     # do merge via msa if needed
     if len(df_i) > 0:
@@ -720,17 +731,19 @@ def cluster_compute(df_q, csize=20, metric='match_score', outliers=False, pw_con
             df = df_i[df_i['cluster_id'] == cid]
             din.append(df.iloc[:csize])
         df_i = bpy.cluster_spoa_merge(pd.concat(din), config=msa_config, workspace=workspace, cleanup=True)
+        df_i['outlier'] = False
     # return results
-    col = ['id','sequence']
-    if outliers and len(df_i) > 0:
-        return pd.concat([df_i[col], df_o[col]])
-    elif outliers and len(df_i)==0:
-        return df_o[col]
-    elif outliers==False and len(df_i) > 0:
-        return df_i[col]
+    if outliers:
+        col = ['id','sequence','outlier']
+        if len(df_i) > 0:
+            return pd.concat([df_i,df_o])[col]
+        else:
+            return df_o[col]
     else:
-        logging.warning('cluster_compute: no clusters found')
-        return []
+        col = ['id','sequence']
+        if len(df_i) == 0: 
+            logging.warning('cluster_compute: no clusters found')
+        return  df_i[col]
 
 def update_config(default, new_config):
     '''
@@ -869,10 +882,14 @@ def main():
     clst_parser = subparser.add_parser('clst', help='suboptions for clustering')
     clst_parser.add_argument('-i', dest='cin_file', type=str, help='input csv file of sequences to cluster')
     clst_parser.add_argument('-o', dest='cout_file', type=str, help='output csv file for cluster center sequences')
+    config['clst_init']=''
+    clst_parser.add_argument('-init', dest='clst_init', type=str, help='csv, fasta, or fastq file containing initial cluster centers.')
     config['clst_folder']='./clusters/'
     clst_parser.add_argument('-f', dest='clst_folder', type=int, help='folder where clustering work is saved')
     config['clst_min_k']=5
     clst_parser.add_argument('-k', dest='clst_min_k', type=int, help='min_cluster_size')
+    config['clst_csize']=20
+    clst_parser.add_argument('-cs', dest='clst_csize', type=int, help='number of sequences from cluster center to multi-align into center sequence')
     config['clst_th_m']=0.9
     clst_parser.add_argument('-tm', dest='clst_th_m', type=float, help='threshold for marking clusters to merge')
     config['clst_th_s']=0.9
@@ -939,12 +956,14 @@ def main():
     logging.info('pmatch_file      = '+config['pmatch_file'])
     logging.info('cin_file         = '+config['cin_file'])
     logging.info('cout_file        = '+config['cout_file'])
+    logging.info('clst_init        = '+config['clst_init'])
     logging.info('clst_folder      = '+config['clst_folder'])
     logging.info('clst_pw_config   = '+config['clst_pw_config'])
     logging.info('clst_N      = '+str(config['clst_N']))
     logging.info('clst_th_s   = '+str(config['clst_th_s']))
     logging.info('clst_th_m   = '+str(config['clst_th_m']))
     logging.info('clst_min_k  = '+str(config['clst_min_k']))
+    logging.info('clst_csize  = '+str(config['clst_csize']))
     logging.info('clst_N_iter = '+str(config['clst_N_iter']))
     logging.info('workspace        = '+config['workspace'])
     logging.info('Run Pseudoref generator = '+str(config['run_prfg']))
@@ -968,27 +987,14 @@ def main():
     if config['run_prfg']:
         # load primers
         primers = bpy.load_primers(config['primer_file'])
-
         # generate pseudo reference database using primer info
         logging.info('Generating pseudo reference database')
-        ref = generate_pseudo_refdb(primers, reads, block=100000, fs=config['prfg_fs'], config=config['prfg_config'])
+        ref = generate_pseudo_refdb(primers, reads, block=10000, fs=config['prfg_fs'], config=config['prfg_config'])
         ref.to_csv(config['db_file'], index=False, compression='infer')
     
     # load reference database
     if config['run_fgs']:
-        if os.path.exists(config['db_file']):
-            logging.info('Loading '+config['db_file']+' as reference database')
-            ftype = config['db_file'].split('.')
-            if 'csv' in ftype:
-                ref = pd.read_csv(config['db_file'])
-                ref = ref[['id','sequence']]
-            elif 'fa' in ftype or 'fasta' in ftype:
-                ref = bpy.read_fasta(config['db_file'])
-            elif 'fq' in ftype or 'fastq' in ftype:
-                ref = bpy.read_fastq(config['db_file'])
-        else:
-            logging.error('Reference database '+config['db_file']+' not found')
-            sys.exit(1)
+        ref = bpy.load_file(config['db_file'])
 
     if config['run_fgs']:
         # search or RCA fragments in reads
@@ -1067,13 +1073,16 @@ def main():
         # load data
         logging.info('Loading cin_file: '+config['cin_file'])
         df = pd.read_csv(config['cin_file']).rename(columns={'consensus':'sequence'})
-
         # only work on sequences which have both forward and reverse primers
         if 'fwd_primer_seq' in df.columns and 'rev_primer_seq' in df.columns:
             df = df[df['fwd_primer_seq'].notna() & df['rev_primer_seq'].notna()]
+        # load initial cluster centers if given
+        df_d = []
+        if config['clst_init']!='':
+            df_d = bpy.load_file(config['clst_init'])
 
         # refine the clusters
-        data, flist = perform_cluster(df, max_iter=config['clst_N_iter'], csize=20, N=config['clst_N'], th_s=config['clst_th_s'], th_m=config['clst_th_m'], pw_config=config['clst_pw_config'], msa_config=config['msa_config'], workspace=config['clst_folder'], ofile=config['clst_iter_out'], timestamp=True)
+        data, flist = perform_cluster(df, df_d, max_iter=config['clst_N_iter'], csize=config['clst_csize'], N=config['clst_N'], th_s=config['clst_th_s'], th_m=config['clst_th_m'], pw_config=config['clst_pw_config'], msa_config=config['msa_config'], workspace=config['clst_folder'], track_file=config['clst_iter_out'], timestamp=True)
 
         # clean up if needed
         if config['clst_track']==False:

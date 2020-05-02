@@ -119,6 +119,8 @@ def main():
         x['chimeric'] = x['count'] > 1
         print('Found',np.sum(x['chimeric']),'chimeric sequences')
         data = data.merge(x[['query_id','chimeric']], on='query_id', how='left')
+    else:
+        data = bpy.get_best(data,['query_id'],metric='AS',stat='idxmax')
     print('Found',len(data),'matches')
     # print results summary
     print(len(A['id']) - len(np.unique(data['query_id'])), 'unmatched')

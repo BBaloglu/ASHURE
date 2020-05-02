@@ -297,6 +297,23 @@ def write_fasta(fname, data):
             text+= str(data[1]) + '\n'
             f.write(text)
 
+def load_file(fname):
+    '''
+    Infers filetype and loads data contained in fname
+    '''
+    if os.path.isfile(fname):
+        logging.info('Loading '+fname)
+        if '.csv' in fname:
+            ref = pd.read_csv(fname)
+        elif '.fa' in fname or '.fasta' in fname:
+            ref = bpy.read_fasta(fname)
+        elif '.fq' in fname or '.fastq' in fname:
+            ref = bpy.read_fastq(fname)
+        return ref
+    else:
+        logging.info('Failed to load '+fname)
+        sys.exit(1)
+
 def get_SAM_info(read, key):
     '''
     Function to parse useful info from a line of the SAM file
@@ -436,7 +453,9 @@ def run_bowtie2(query, database, workspace='./bowtie2/', config='-a --very-sensi
 
     # compute similarity
     v1 = np.min([data['q_len'].values, data['t_len'].values], axis = 0)
-    data['similarity'] = 1-data['NM']/v1
+    v2 = np.max([data['q_len'].values, data['t_len'].values], axis = 0)
+    data['similarity_H'] = 1-data['NM']/v1
+    data['similarity_L'] = 1-data['NM']/v2
         
     # remove work folder
     if cleanup:
@@ -530,8 +549,10 @@ def run_bwa(query, database, workspace='./bwa/', config=' mem -a ', build_index=
 
     # compute similarity
     v1 = np.min([data['q_len'].values, data['t_len'].values], axis = 0)
-    data['similarity'] = 1-data['NM']/v1
-
+    v2 = np.max([data['q_len'].values, data['t_len'].values], axis = 0)
+    data['similarity_H'] = 1-data['NM']/v1
+    data['similarity_L'] = 1-data['NM']/v2
+ 
     # remove work folder
     if cleanup:
         subprocess.run(['rm','-r',workspace])
@@ -654,7 +675,9 @@ def run_minimap2(query, database, workspace='./minimap2/', config='-x map-ont', 
     
     # compute similarity
     v1 = np.min([data['q_len'].values, data['t_len'].values], axis = 0)
-    data['similarity'] = data['match']/v1
+    v2 = np.max([data['q_len'].values, data['t_len'].values], axis = 0)
+    data['similarity_H'] = 1-data['NM']/v1
+    data['similarity_L'] = 1-data['NM']/v2
     
     # drop cigar if it is not present
     if cigar == False:
