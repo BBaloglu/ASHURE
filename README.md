@@ -1,6 +1,15 @@
 # Getting started
 ```bash
-echo write me write me write me write me write me i am a lazy bastard
+./ashure.py -h                                                      # prints help
+./ashure.py run -h                                                  # prints help on a submodule
+./ashure.py run -fq folder/*.fq -p primers.csv -o consensus.csv -r  # runs everything with default parameters
+./ashure.py run -c config.json                                      # writes parameters to config.json
+./ashure.py run -fq folder/*.fq -c config.json -r                   # loads parameters from config.json and run everything
+
+./ashure.py prfg -fq folder/*.fq -p primers.csv -o sequences.csv -r           # runs prfg module
+./ashure.py clst -i sequences.csv -o clusters.csv -iter 10 -r                 # runs clst module for 10 iterations
+./ashure.py run -fq folder/*.fq -db clusters.csv -o consensus.csv -r          # runs everything with clusters.csv as reference
+./ashure.py run -fq folder/*.fq -db clusters.csv -o cons.csv -r fgs,msa,cons  # runs fgs, msa, cons modules only 
 ```
 
 # ASHURE
@@ -31,9 +40,9 @@ pip install hdbscan         # for clustering
 
 For non-python libraries such as spoa and minimap2, subprocess.run() is used by wrapper functions to make calls to these tools. These binaries should be accessible from your local path. Install instructions for spoa and minimap2 can be found on their github pages. If you download or compile these binaries without installing them to /usr/bin/, you must add them to your local path by running the following commands.
 ```bash
-mv minimap2 /home/username/.local/bin                    # adds minimap2 to your local binary path
-export PATH=$PATH':/home/username/.local/bin'            # makes executables in ~/.local/bin accessible in your shell
-echo PATH=$PATH':/home/username/.local/bin' >> .bashrc   # updates these settings everytime you login
+mv minimap2 /home/username/.local/bin                       # adds minimap2 to your local binary path
+export PATH=$PATH':/home/username/.local/bin'               # makes executables in ~/.local/bin accessible in your shell
+echo PATH=$PATH':/home/username/.local/bin' >> .bash_login  # updates these settings everytime you login
 ```
 
 ### Optional dependences
@@ -41,9 +50,7 @@ Wrappers for the following aligners can also be called from `bilge_pype.py` Thes
 
 [mafft](https://mafft.cbrc.jp/alignment/software/source.html) for progressive multi-sequence alignment
 
-[bwa](https://github.com/lh3/bwa) is better for aligning miseq data
-
-[bowtie2](https://github.com/BenLangmead/bowtie) is better for aligning miseq data
+[bwa](https://github.com/lh3/bwa) and [bowtie2](https://github.com/BenLangmead/bowtie) for aligning miseq fastq
 
 The following libraries are used in demo notebooks for data visualization
 ```bash
@@ -58,6 +65,8 @@ git clone https://github.com/bbaloglu/ashure   # clones this repository
 cd ashure                                      # enter the repository folder
 chmod +x ashure.py                             # make it executable
 ashure.py run -h                               # look at the help commands
+mv ashure.py ~/.local/bin/ashure               # adds ashure to local path
+mv bilge_pype.py ~/.local/bin/                 # adds bilge_pype module to local path with ashure
 ```
 
 `ashure.py` imports many functions from `bilge_pype.py` These should be in same folder together for the code to work. I will bilge_pype to pypi later if time permits.
@@ -84,12 +93,23 @@ General usage of ashure is as following:
 ./ashure.py run -fq fastq/*.fastq -p primers.csv -o1 cons.csv -r prfg,fgs,msa
 ```
 
-subcommands allow more customization over each module of the ashure pipeline
+subcommands allow more customization over each module of the ashure pipeline.
 
+Example usage from pseudo reference generator module
 ```bash
-./ashure.py prfg -h   # prints help about the pseudo reference generator module
-./ashure.py prfg -r   # runs the pseudo reference module
-./ashure.py prfg -c config.json   # updates custom parameters for pseudo reference generator to config.json
+./ashure.py prfg -h                                                               # prints help
+./ashure.py prfg -fq folder/*.fq -p primers.csv -o sequences.csv -r               # runs the module
+./ashure.py prfg -fq folder/*.fq -p primers.csv -o sequences.csv -fs 500-3000 -r  # runs the module with fastq filter for 500-3000bp
+./ashure.py prfg -fq folder/*.fq -p primers.csv -o sequences.csv -fs 500-3000 -c config.json  # updates config.json with custom parameters
+
+```
+
+Example usage from clustering module
+```bash
+./ashure.py clst -h                                           # prints help
+./ashure.py clst -i input.csv -o clusters.csv -r              # runs clustering
+./ashure.py clst -i input.csv -o clusters.csv -c config.json  # updates config.json with custom parameters
+
 ```
 
 ## Library
