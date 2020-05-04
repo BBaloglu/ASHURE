@@ -584,24 +584,20 @@ def cluster_eval(df_q, df_c, pw_config, workspace):
 
 def cluster_sweep(df_q, df_c, N, csize, pw_config, msa_config, workspace):
     df_c, df_align = cluster_eval(df_q, df_c, pw_config, workspace)
-    # partition and get lower quartile # debug --> hierarchical cannot allocate enough memory
-    rid = []
-    for cid in df_c['id']:
-        df_a = df_align[df_align['database_id']==cid].reset_index()
-        if len(df_a) > 4:
-            x = df_a.rename(columns={'query_id':'id'})
-            y = bpy.cluster_Kmeans(x[['id','match_score']], n_clusters=4, n_init=10, n_iter=100, ordered=True)
-            rid+= [r for r in y[y['cluster_id'] < 2]['id']]
-    # get badly aligned sequences
-    uncover = set(df_q['id'].astype(str)) - set(df_align['query_id'].astype(str))
-    uncover = uncover.union(rid)
+    # partition and get lower quartile # debug
+    df_align = bpy.get_best(df_align,['query_id'],metric='similarity',stat='idxmax')
+    df_align = df_align.rename(columns={'query_id':'id'})
+    # stratify
+    x = bpy.cluster_Kmeans(df_align[['id','match_score']], n_clusters=4, n_init=10, n_iter=100, ordered=True)
+    c = x['cluster_id'] < 2 # get bad alignments
+    uncover = set(df_q['id'].astype(str)) - set(x[~c]['id'].astype(str))
     uncover = df_q[df_q['id'].isin([i for i in uncover])]
     logging.info('cluster_sweep: uncovered '+str(len(uncover))+'/'+str(len(df_q)))
     # subsample and run optics to get centers
     ridx = np.random.permutation(len(uncover)) 
-    L = 0
     y = []
-    while L < len(uncover):
+    L = 0
+    while L < len(uncover) and L/N < 2:
         x = uncover.iloc[ridx[L:L+N]]
         cout = cluster_compute(x, csize, outliers=False, pw_config=pw_config, msa_config=msa_config, workspace=workspace)
         y.append(cout)
@@ -628,12 +624,12 @@ def cluster_split(df_q, df_c, th_s, N, csize, pw_config, msa_config, workspace):
     # do the split
     keep = set(df_c['id'].astype(str)) - set(squeue)
     df_c = df_c[df_c['id'].isin([i for i in keep])]
-    
-    # add data for semi random sampling
+    # add weights for semi random sampling
     df_a = bpy.get_best(df_align,['query_id'],metric='similarity',stat='idxmax')
     df_a = df_a.rename(columns={'similarity':'best'})
     df_align = df_align.merge(df_a[['query_id','best']],on='query_id',how='left')
-
+    df_align['weight'] = df_align['similarity']/(df_align['similarity'] + df_align['best'])
+    df_align.loc[df_align['weight'] > 0.5,'weight'] = 1
     for i in range(0,len(squeue)):
         qout = squeue[i]
         logging.info('cluster_split: splitting on cid='+qout+' '+str(i)+'/'+str(len(squeue)))
@@ -656,7 +652,6 @@ def cluster_merge(df_q, df_c, th_m, N, csize, pw_config, msa_config, workspace):
     cosim = bpy.dist_cosine(x.T, x.T)
     cosim = pd.DataFrame(cosim, columns=cols)
     cosim['id'] = cols
-
     df_clst = bpy.cluster_hierarchical(cosim, metric='precomputed', linkage='complete', thresh=th_m)
     # clusters not to perform merge
     c = df_clst['cluster_id']== -1
@@ -692,9 +687,8 @@ def cluster_subsample(df_align, dlist, N=100, mode='sorted', metric='AS'):
             ridx = np.random.permutation(len(v))
             qlist = v[ridx[:N]]
         elif mode=='semi':
-            v = df_align[df_align['database_id']==d][['query_id','similarity','best']].values
-            v = v[v[:,2] > 0]
-            c = v[:,1]/v[:,2] > np.random.rand(len(v)) # weight probability on alignment 
+            v = df_align[df_align['database_id']==d][['query_id','weight']].values
+            c = v[:,1] > np.random.rand(len(v)) # weight probability on alignment 
             v = v[c]
             qlist = v[:N,0]
         else:
@@ -724,11 +718,9 @@ def cluster_compute(df_q, csize=20, metric='similarity', outliers=False, pw_conf
             df_q['outlier'] = True
             return df_q[['id','sequence','outlier']]
         return pd.DataFrame([],columns=['id','sequence'])
-    # compute pairwise --> slower but more accurate
     logging.info('cluster_compute: computing pairwise distance matrix')
-    files = bpy.get_pairwise_distance(df_q, block=2000, output_folder=workspace, workspace=workspace, config=pw_config, symmetric=True)
-    df = pd.concat([pd.read_csv(f) for f in files])
-    bpy.batch_file_remove(files) # clean up the files
+    df = bpy.run_minimap2(df_q, df_q, config=pw_config, workspace=workspace, cleanup=True)
+
     # catch error in case pairwise alignment fails
     if len(df) == 0:
         logging.warning('cluster_compute: not enough samples to cluster')
