@@ -453,10 +453,9 @@ def run_bowtie2(query, database, workspace='./bowtie2/', config='-a --very-sensi
 
     # compute similarity
     v1 = np.min([data['q_len'].values, data['t_len'].values], axis = 0)
-    v2 = np.max([data['q_len'].values, data['t_len'].values], axis = 0)
-    data['similarity_H'] = 1-data['NM']/v1
-    data['similarity_L'] = 1-data['NM']/v2
-        
+    data['similarity'] = 1-data['NM']/v1
+    data.loc[data['similarity'] < 0, 'similarity'] = 0
+  
     # remove work folder
     if cleanup:
         subprocess.run(['rm', '-r', workspace])
@@ -549,9 +548,8 @@ def run_bwa(query, database, workspace='./bwa/', config=' mem -a ', build_index=
 
     # compute similarity
     v1 = np.min([data['q_len'].values, data['t_len'].values], axis = 0)
-    v2 = np.max([data['q_len'].values, data['t_len'].values], axis = 0)
-    data['similarity_H'] = 1-data['NM']/v1
-    data['similarity_L'] = 1-data['NM']/v2
+    data['similarity'] = 1-data['NM']/v1
+    data.loc[data['similarity'] < 0, 'similarity'] = 0
  
     # remove work folder
     if cleanup:
@@ -675,10 +673,9 @@ def run_minimap2(query, database, workspace='./minimap2/', config='-x map-ont', 
     
     # compute similarity
     v1 = np.min([data['q_len'].values, data['t_len'].values], axis = 0)
-    v2 = np.max([data['q_len'].values, data['t_len'].values], axis = 0)
-    data['similarity_H'] = 1-data['NM']/v1
-    data['similarity_L'] = 1-data['NM']/v2
-    
+    data['similarity'] = 1-data['NM']/v1
+    data.loc[data['similarity'] < 0, 'similarity'] = 0
+
     # drop cigar if it is not present
     if cigar == False:
         data.drop(columns = ['CIGAR'], inplace = True)
@@ -868,7 +865,7 @@ def remove_overlaps(frags, metric='AS', thresh=0):
 def get_best(df, col, metric='AS', stat='idxmax'):
     df=df.reset_index(drop=True)
     idx = df.groupby(by=col).agg({metric:stat}).reset_index()
-    return df.iloc[idx[metric].values]
+    return df.iloc[idx[metric].values].reset_index()
 
 def run_msa(MSA_infiles, aligner='spoa', config='-l 0 -r 2', thread_lock=True):
     '''
@@ -1229,18 +1226,28 @@ def cluster_hierarchical(df, metric='precomputed', linkage='single', thresh=0.5,
     '''
     # running the clustering
     logging.info('Running hierarchical clustering')
-
     # initialize settings
-    clust = sklearn.cluster.AgglomerativeClustering(n_clusters = n_clusters, distance_threshold = thresh,
-                                                    affinity = metric, linkage = linkage)
+    clust = sklearn.cluster.AgglomerativeClustering(n_clusters=n_clusters, distance_threshold=thresh, affinity=metric, linkage=linkage)
     cols = df.columns[df.columns!='id'] # get only non read id values
     clust.fit(df[cols].values)
     
     L = clust.labels_
-    for i in np.unique(L):
-        if np.sum(L==i) == 1:
-            L[L==i] = -1 # set cluster size = 1 as outliers
-    return pd.DataFrame(np.transpose([df['id'].values, L]), columns = ['id','cluster_id'])
+    # order the data if euclidean and ward are used
+    if metric=='euclidean':
+        x = []
+        for i in np.unique(L):
+            v = np.mean(df[cols].values[L==i])
+            x.append(v)
+        s = np.argsort(x)
+        L2 = np.zeros(len(L))
+        for i in range(0,len(s)):
+            L2[L==s[i]] = i
+        return pd.DataFrame(np.transpose([df['id'].values, L2]), columns = ['id','cluster_id'])
+    else:
+        for i in np.unique(L):
+            if np.sum(L==i) == 1:
+                L[L==i] = -1 # set cluster size = 1 as outliers
+        return pd.DataFrame(np.transpose([df['id'].values, L]), columns = ['id','cluster_id'])
 
 def cluster_HDBSCAN(df, metric='euclidean', min_cluster_size=100, min_samples=None, n_jobs=4):
     '''
@@ -1252,8 +1259,7 @@ def cluster_HDBSCAN(df, metric='euclidean', min_cluster_size=100, min_samples=No
     n_jobs = number of parallel processes to run if supported by algorithm, -1 means use all processors
     '''
     # initialize the 
-    clust = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples,
-                            core_dist_n_jobs=n_jobs, metric=metric)
+    clust = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples, core_dist_n_jobs=n_jobs, metric=metric)
     
     logging.info('Running HDBSCAN')
     cols = df.columns[df.columns!='id'] # get only non read id values
@@ -1308,14 +1314,12 @@ def cluster_OPTICS(df, metric='euclidean', min_samples=None, min_cluster_size=No
         z = np.abs(df[cols].values)
         max_eps = (np.max(z)+np.min(z))/2
     logging.info('max_eps = '+str(max_eps))
-    
     # do optimization on min_samples to get clustering with the least outliers
     if min_samples == None or min_samples > len(df):
         min_samples = np.ceil(len(df)/2)
         max_iter = 100
     else: # if min_samples is provided, dont optimize
         max_iter = 1
-    
     # initialize settings
     prev_nout = len(df)
     prev_nclust = 0
@@ -1413,7 +1417,6 @@ def reachability_alt_label(reach):
         c.append(np.mean(x))
     s = np.argsort(c)
     labels[(km.labels_==s[0])] = -1
-
     # flag high reachability as outliers
     y = np.copy(reach)
     y[(km.labels_==s[0])] = np.max(y)
@@ -1425,7 +1428,6 @@ def reachability_alt_label(reach):
         c.append(np.mean(x))
     s = np.argsort(c)
     labels[(km.labels_==s[-1])] = -1
-
     # assign new labels
     th = labels!=-1
     c = th[1:]!=th[:-1]
@@ -1446,24 +1448,20 @@ def cluster_Kmeans(df, n_clusters, n_init=10, n_iter=100):
     logging.info('Running kmeans with n_clusters = '+str(n_clusters))
     cols = df.columns[df.columns!='id'] # get only non read id values
     x = df[cols.values]
-    
     # initialize settings
     clust = sklearn.cluster.MiniBatchKMeans(n_clusters = n_clusters, n_init = n_init, max_iter = n_iter)
     clust.fit(x)
-    
     logging.info('Getting results')
     labels = clust.labels_
     inertia = clust.inertia_
     centers = clust.cluster_centers_
     r_id = df['id'].values
-    
     # build center distance matrix
     c = np.zeros(x.shape)
     for i in range(0,len(x)):
         c[i] = centers[labels[i]]
     d = np.std(x-c, axis = 1) # get squared distance
     s = np.lexsort((d,labels))
-    
     df = np.transpose([r_id[s], labels[s], range(0,len(r_id)), d[s]])
     df = pd.DataFrame(df, columns = ['id', 'cluster_id', 'ordering', 'inertia'])
     df['cluster_id'] = df['cluster_id'].astype(int)
