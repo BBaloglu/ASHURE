@@ -584,17 +584,17 @@ def cluster_eval(df_q, df_c, pw_config, workspace):
 
 def cluster_sweep(df_q, df_c, N, csize, pw_config, msa_config, workspace):
     df_c, df_align = cluster_eval(df_q, df_c, pw_config, workspace)
-    
-    # partition and get lower quartile
-    x = bpy.get_best(df_align,['query_id'],metric='similarity',stat='idxmax')
-    x = x.rename(columns={'query_id':'id'})
-    y = bpy.cluster_hierarchical(x[['id','similarity']], metric='euclidean', linkage='average', thresh=None, n_clusters=4)
-    c = y['cluster_id'] < 3
-    p = np.max(x[c]['similarity'])
-    logging.info('cluster_sweep: similarity > '+str(p))
-    
+    # partition and get lower quartile # debug --> hierarchical cannot allocate enough memory
+    rid = []
+    for cid in df_c['id']:
+        df_a = df_align[df_align['database_id']==cid].reset_index()
+        if len(df_a) > 4:
+            x = df_a.rename(columns={'query_id':'id'})
+            y = bpy.cluster_Kmeans(x[['id','match_score']], n_clusters=4, n_init=10, n_iter=100, ordered=True)
+            rid+= [r for r in y[y['cluster_id'] < 2]['id']]
     # get badly aligned sequences
-    uncover = set(df_q['id'].astype(str)) - set(y[~c]['id'].astype(str))
+    uncover = set(df_q['id'].astype(str)) - set(df_align['query_id'].astype(str))
+    uncover = uncover.union(rid)
     uncover = df_q[df_q['id'].isin([i for i in uncover])]
     logging.info('cluster_sweep: uncovered '+str(len(uncover))+'/'+str(len(df_q)))
     # subsample and run optics to get centers
@@ -628,17 +628,17 @@ def cluster_split(df_q, df_c, th_s, N, csize, pw_config, msa_config, workspace):
     # do the split
     keep = set(df_c['id'].astype(str)) - set(squeue)
     df_c = df_c[df_c['id'].isin([i for i in keep])]
+    
+    # add data for semi random sampling
+    df_a = bpy.get_best(df_align,['query_id'],metric='similarity',stat='idxmax')
+    df_a = df_a.rename(columns={'similarity':'best'})
+    df_align = df_align.merge(df_a[['query_id','best']],on='query_id',how='left')
+
     for i in range(0,len(squeue)):
         qout = squeue[i]
         logging.info('cluster_split: splitting on cid='+qout+' '+str(i)+'/'+str(len(squeue)))
-        # partition the sequences to each cluster
-        df_a = df_align[df_align['database_id']==qout].reset_index()
-        if len(df_a) > 50: # only do aggressive partitioning of sample is large enough
-            x = df_a.rename(columns={'query_id':'id'})
-            y = bpy.cluster_hierarchical(x[['id','match_score']], metric='euclidean', linkage='average', thresh=None, n_clusters=4)
-            df_a = df_a[y['cluster_id'] > 1]
         # subsample
-        qlist = cluster_subsample(df_a, [qout], N=N, mode='rand')
+        qlist = cluster_subsample(df_align, [qout], N=N, mode='semi')
         qlist = df_q[df_q['id'].isin(qlist)]
         cout = cluster_compute(qlist, csize, outliers=False, pw_config=pw_config, msa_config=msa_config, workspace=workspace)
         # record cluster centers
@@ -687,11 +687,18 @@ def cluster_subsample(df_align, dlist, N=100, mode='sorted', metric='AS'):
     df_align = df_align.sort_values(by=['database_id',metric])[::-1] # set to high value first
     x = []
     for d in dlist:
-        v = df_align[df_align['database_id']==d]['query_id'].values
         if mode=='rand':
+            v = df_align[df_align['database_id']==d]['query_id'].values
             ridx = np.random.permutation(len(v))
             qlist = v[ridx[:N]]
+        elif mode=='semi':
+            v = df_align[df_align['database_id']==d][['query_id','similarity','best']].values
+            v = v[v[:,2] > 0]
+            c = v[:,1]/v[:,2] > np.random.rand(len(v)) # weight probability on alignment 
+            v = v[c]
+            qlist = v[:N,0]
         else:
+            v = df_align[df_align['database_id']==d]['query_id'].values
             qlist = v[:N]
         x+= [q for q in qlist]
     return np.unique(x)
@@ -802,6 +809,8 @@ def main():
     run_parser = subparser.add_parser('run', formatter_class=argparse.RawTextHelpFormatter, help='suboptions for running the pipeline')
     config['fastq']=[]
     run_parser.add_argument('-fq', dest='fastq', type=str, nargs='+', help='fastq files from the basecaller')
+    config['exclude']=[]
+    run_parser.add_argument('-e', dest='exclude', type=str, nargs='+', default=[], help='frags files containing reads which are excluded from search')
     config['primer_file']='primers.csv'
     run_parser.add_argument('-p', dest='primer_file', type=str,
             help='''csv file containing forward and reverse primers used.
@@ -853,6 +862,7 @@ def main():
     prfg_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
     prfg_parser.add_argument('-r', dest='run_prfg', action='store_true', help='generate pseudo reference database now with the current configuration')
     prfg_parser.add_argument('-fq', dest='fastq', type=str, nargs='+', default=[], help='fastq reads to search')
+    prfg_parser.add_argument('-e', dest='exclude', type=str, nargs='+', default=[], help='frags files containing reads which are excluded from search')
     prfg_parser.add_argument('-p', dest='primer_file', type=str,
             help='''csv file containing forward and reverse primers used.
     This must have at least columns [fwd_id, fwd_seq, rev_id, rev_seq]''')
@@ -864,6 +874,7 @@ def main():
     config['fgs_config']='-k10 -w1'
     fgs_parser.add_argument('-c', dest='fgs_config', type=str, help='config options passed to minimap2')
     fgs_parser.add_argument('-fq', dest='fastq', type=str, nargs='+', default=[], help='fastq reads to search')
+    fgs_parser.add_argument('-e', dest='exclude', type=str, nargs='+', default=[], help='frags files containing reads which are excluded from search')
     fgs_parser.add_argument('-db', dest='db_file', type=str, help='file containing reference sequences used in fragment search')
     config['frag_folder']='./frags/'
     fgs_parser.add_argument('-o', dest='frag_folder', type=str, help='folder where frags csv files are stored')
@@ -1002,6 +1013,10 @@ def main():
             logging.error('no fastq files provided')
             sys.exit(1)
         reads = bpy.load_ONT_fastq(config['fastq'], low_mem=config['low_mem'])
+        # exclude reads which already have hits
+        exclude = pd.concat([pd.read_csv(f) for f in config['exclude']])
+        reads = reads[reads['id'].isin(exclude['query_id'])]
+        del exclude
     
     # run pseudo reference database generator if selected
     if config['run_prfg']:

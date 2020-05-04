@@ -1220,7 +1220,7 @@ def add_sample_weight(df, weight):
     out = pd.DataFrame(out, columns = ['id'])
     return out.merge(df, on = 'id', how = 'left')
 
-def cluster_hierarchical(df, metric='precomputed', linkage='single', thresh=0.5, n_clusters=None):
+def cluster_hierarchical(df, metric='precomputed', linkage='single', thresh=0.5, n_clusters=None, ordered=False):
     '''
     Perform hierarchical clustering on a distance matrix
     '''
@@ -1232,8 +1232,7 @@ def cluster_hierarchical(df, metric='precomputed', linkage='single', thresh=0.5,
     clust.fit(df[cols].values)
     
     L = clust.labels_
-    # order the data if euclidean and ward are used
-    if metric=='euclidean':
+    if ordered and df[cols].values.shape[1] == 1:
         x = []
         for i in np.unique(L):
             v = np.mean(df[cols].values[L==i])
@@ -1242,12 +1241,12 @@ def cluster_hierarchical(df, metric='precomputed', linkage='single', thresh=0.5,
         L2 = np.zeros(len(L))
         for i in range(0,len(s)):
             L2[L==s[i]] = i
-        return pd.DataFrame(np.transpose([df['id'].values, L2]), columns = ['id','cluster_id'])
-    else:
+        L = L2
+    else:  
         for i in np.unique(L):
             if np.sum(L==i) == 1:
                 L[L==i] = -1 # set cluster size = 1 as outliers
-        return pd.DataFrame(np.transpose([df['id'].values, L]), columns = ['id','cluster_id'])
+    return pd.DataFrame(np.transpose([df['id'].values, L]), columns = ['id','cluster_id'])
 
 def cluster_HDBSCAN(df, metric='euclidean', min_cluster_size=100, min_samples=None, n_jobs=4):
     '''
@@ -1440,16 +1439,16 @@ def reachability_alt_label(reach):
         k+=1
     return labels
 
-def cluster_Kmeans(df, n_clusters, n_init=10, n_iter=100):
+def cluster_Kmeans(df, n_clusters, n_init=10, n_iter=100, ordered=False):
     '''
     Function to perform clustering via k means algorithm
     '''
     # running the clustering
     logging.info('Running kmeans with n_clusters = '+str(n_clusters))
     cols = df.columns[df.columns!='id'] # get only non read id values
-    x = df[cols.values]
+    x = df[cols].values
     # initialize settings
-    clust = sklearn.cluster.MiniBatchKMeans(n_clusters = n_clusters, n_init = n_init, max_iter = n_iter)
+    clust = sklearn.cluster.MiniBatchKMeans(n_clusters=n_clusters, n_init=n_init, max_iter=n_iter)
     clust.fit(x)
     logging.info('Getting results')
     labels = clust.labels_
@@ -1460,7 +1459,22 @@ def cluster_Kmeans(df, n_clusters, n_init=10, n_iter=100):
     c = np.zeros(x.shape)
     for i in range(0,len(x)):
         c[i] = centers[labels[i]]
-    d = np.std(x-c, axis = 1) # get squared distance
+    if x.shape[1] == 1:
+        d = np.abs(x-c).reshape(len(x))
+    else:
+        d = np.std(x-c, axis=1) # get squared distance
+    # order the labels
+    if ordered and x.shape[1]==1:
+        y = []
+        for i in np.unique(labels):
+            v = np.mean(df[cols].values[labels==i])
+            y.append(v)
+        s = np.argsort(y)
+        L2 = np.zeros(len(labels))
+        for i in range(0,len(s)):
+            L2[labels==s[i]] = i
+        labels = L2
+    # order based on center distance and labels 
     s = np.lexsort((d,labels))
     df = np.transpose([r_id[s], labels[s], range(0,len(r_id)), d[s]])
     df = pd.DataFrame(df, columns = ['id', 'cluster_id', 'ordering', 'inertia'])
