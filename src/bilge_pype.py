@@ -585,7 +585,7 @@ def parse_PAF(fname):
     data = data.rename(columns={'cg':'CIGAR'})
     return data
 
-def run_minimap2(query, database, workspace='./minimap2/', config='-x map-ont', cigar=True, build_index=True, use_index=False, cleanup=False):
+def run_minimap2(query, database, workspace='./minimap2/', config='-x map-ont', cigar=True, build_index=False, use_index=False, cleanup=False):
     '''
     This is a wrapper for the minimap2 aligner. This aligner is better suited for long reads (>100bp)
 
@@ -963,6 +963,8 @@ def find_endgap(seq):
 
 def get_pairwise_distance(seq, block=500, output_folder='./pairwise_dist/', workspace='./pw_aligner/', config='-k15 -w10 -PD', symmetric=False, cleanup=False):
     '''
+    To do: Add mpi for multi-core or cluster dispatch
+
     Function to compute pairwise distance matrix of a list of sequences
     seq = pandas dataframe of a list of sequences with columns [id, sequence]
     block = number of sequences to compare in a block --> break up computation and save it
@@ -1002,8 +1004,7 @@ def get_pairwise_distance(seq, block=500, output_folder='./pairwise_dist/', work
         for j in range(js,len(df)):
             logging.info('processing block '+str(i)+','+str(j)+' '+str(count)+'/'+str(N))
             count+=1
-            out = run_minimap2(df[j], df[i], config = config, workspace = workspace, 
-                               cigar = True, build_index = build_index, use_index = True, cleanup=False)
+            out = run_minimap2(df[j], df[i], config=config, workspace=workspace, cigar=True, build_index=build_index, use_index=True, cleanup=False)
             build_index = False
             fname = output_folder+'dst_'+str(i)+'_'+str(j)+'.csv.gz'
             out.to_csv(fname, index=False, compression='infer')

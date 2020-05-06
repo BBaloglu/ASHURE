@@ -300,13 +300,11 @@ def match_primer_to_read(primers, reads, thresh=10, config='-x map-ont', workspa
     # search for forward primers
     logging.info('searching forward primers')
     database = primers.rename(columns={'fwd_id':'id','fwd_seq':'sequence'})
-    df1 = bpy.run_minimap2(reads, database[['id','sequence']], workspace, config,
-                           build_index = True, use_index = True)
+    df1 = bpy.run_minimap2(reads, database[['id','sequence']], workspace, config, build_index=True, use_index=True)
     # search for reverse primers
     logging.info('searching reverse primers')
     database = primers.rename(columns={'rev_id':'id','rev_seq':'sequence'})
-    df2 = bpy.run_minimap2(reads, database[['id','sequence']], workspace, config,
-                           build_index = True, use_index = True)
+    df2 = bpy.run_minimap2(reads, database[['id','sequence']], workspace, config, build_index=True, use_index=True)
     # remove the working directory
     subprocess.run(['rm','-r',workspace])
 
@@ -334,8 +332,7 @@ def match_primer_to_read(primers, reads, thresh=10, config='-x map-ont', workspa
     logging.info('finding best primer match for each read')
     # do a sort by query and position of the primers
     df = df.sort_values(by=['query_id','q_start']).reset_index(drop=True)
-    data = df[['query_id','database_id','pdir','orientation',
-               'q_start','q_end','AS']].values
+    data = df[['query_id','database_id','pdir','orientation','q_start','q_end','AS']].values
     # find fwd primer and then rev primer
     pairs = []
     cur_pair = [-1,-1,-np.inf] # [index of fwd primer, index of rev primer, match score of combined]
@@ -458,8 +455,7 @@ def match_primer_to_read(primers, reads, thresh=10, config='-x map-ont', workspa
         logging.info(str(len(df_f1))+'/'+str(len(reads))+' reads with fwd and rev primer')
         logging.info(str(len(df_f2))+'/'+str(len(reads))+' reads with only fwd primer found')
         logging.info(str(len(df_r3))+'/'+str(len(reads))+' reads with only rev primer found')
-        logging.info(str(len(reads) - len(df_f1) - len(df_f2) - len(df_r3))+'/'+str(len(reads))+
-                                ' reads with no primer matches')
+        logging.info(str(len(reads) - len(df_f1) - len(df_f2) - len(df_r3))+'/'+str(len(reads))+' reads with no primer matches')
     return df
 
 def trim_consensus(df_pmatch, df_cons):
@@ -536,7 +532,7 @@ def trim_consensus(df_pmatch, df_cons):
     return df.merge(df_cons[['id','N frags','msa_input_file']])
     #return df.merge(df_cons[['id','N frags']])
 
-def perform_cluster(df_q, df_d=[], max_iter=1, csize=20, N=2000, th_s=0.9, th_m=0.5, pw_config='', msa_config='', workspace='./cluster/', track_file='', timestamp=True):
+def perform_cluster(df_q, df_d=[], max_iter=1, csize=20, N=2000, th_s=2, th_m=0.9, pw_config='', msa_config='', workspace='./cluster/', track_file='', timestamp=True):
     '''
     Refines the cluster centers for a set of sequence data
     df_q = dataframe of query sequences to search for cluster centers.
@@ -544,8 +540,8 @@ def perform_cluster(df_q, df_d=[], max_iter=1, csize=20, N=2000, th_s=0.9, th_m=
            df_q and df_d must both have at least columns [id, sequence]
     csize = number of sequences from cluster center to use for recomputation of cluster center sequence
     max_iter = max iterations to run
-    th_s = threshold accuracy of the lower quartile that triggers recomputation of the cluster center
-    th_m = number of sequences near cluster center to take for merge recomputation
+    th_s = threshold lower quartile of accuracy to sample for rare sequences
+    th_m = threshold eps for clustering related cluster centers
     N = size of the random sample to compute pairwise distance data with
     workspace = workspace folder for the aligner
     '''
@@ -558,8 +554,8 @@ def perform_cluster(df_q, df_d=[], max_iter=1, csize=20, N=2000, th_s=0.9, th_m=
     track_file_list = []
     for k in range(0, max_iter):
         logging.info('perform_cluster: iter = '+str(k)+'/'+str(max_iter))
-        df_c = cluster_sweep(df_q, df_c, N, csize, pw_config, msa_config, workspace)
-        df_c = cluster_split(df_q, df_c, th_s, N, csize, pw_config, msa_config, workspace)
+        df_c = cluster_split(df_q, df_c, N, csize, pw_config, msa_config, workspace)
+        df_c = cluster_sweep(df_q, df_c, th_s, N, csize, pw_config, msa_config, workspace)
         df_c = cluster_merge(df_q, df_c, th_m, N, csize, pw_config, msa_config, workspace)
         # track progress
         if track_file!= '':
@@ -570,57 +566,44 @@ def perform_cluster(df_q, df_d=[], max_iter=1, csize=20, N=2000, th_s=0.9, th_m=
             fname = track_file+ts+'_i'+str(k)+'_c'+str(len(df_c))+'.csv.gz'
             df_c.to_csv(fname, index=False, compression='infer')
             track_file_list.append(fname)
-    # do one more merge
+    # final refinement
+    df_c['split'] = True
+    df_c = cluster_split(df_q, df_c, N, csize, pw_config, msa_config, workspace)
     df_c = cluster_merge(df_q, df_c, th_m, N, csize, pw_config, msa_config, workspace)
     logging.info('perform_cluster: complete')
     return df_c, track_file_list
 
-def cluster_eval(df_q, df_c, pw_config, workspace):
-    df_align = bpy.run_minimap2(df_q, df_c, config=pw_config, cigar=True, workspace=workspace)
+def cluster_eval(df_q, df_c, pw_config, workspace, cigar=True):
+    config = pw_config+' --for-only'
+    df_align = bpy.run_minimap2(df_q, df_c, config=config, cigar=cigar, workspace=workspace)
     cols = np.unique(df_align['database_id'])
     df_c = df_c[df_c['id'].isin(cols)]
-    logging.info('perform_cluster: number of clusters = '+str(len(df_c)))
+    logging.info('cluster_eval: number of clusters = '+str(len(df_c)))
     return df_c, df_align
 
-def cluster_sweep(df_q, df_c, N, csize, pw_config, msa_config, workspace):
-    df_c, df_align = cluster_eval(df_q, df_c, pw_config, workspace)
+def cluster_sweep(df_q, df_c, th_s, N, csize, pw_config, msa_config, workspace):
+    df_c, df_align = cluster_eval(df_q, df_c, pw_config, workspace, cigar=True)
     # partition and get lower quartile # debug
     df_align = bpy.get_best(df_align,['query_id'],metric='similarity',stat='idxmax')
     df_align = df_align.rename(columns={'query_id':'id'})
     # stratify
     x = bpy.cluster_Kmeans(df_align[['id','match_score']], n_clusters=4, n_init=10, n_iter=100, ordered=True)
-    c = x['cluster_id'] < 2 # get bad alignments
+    c = x['cluster_id'] <= th_s # get bad alignments
     uncover = set(df_q['id'].astype(str)) - set(x[~c]['id'].astype(str))
     uncover = df_q[df_q['id'].isin([i for i in uncover])]
     logging.info('cluster_sweep: uncovered '+str(len(uncover))+'/'+str(len(df_q)))
     # subsample and run optics to get centers
     ridx = np.random.permutation(len(uncover)) 
-    y = []
-    L = 0
-    while L < len(uncover) and L/N < 2:
-        x = uncover.iloc[ridx[L:L+N]]
-        cout = cluster_compute(x, csize, outliers=False, pw_config=pw_config, msa_config=msa_config, workspace=workspace)
-        y.append(cout)
-        L+=N
-    cout = pd.concat(y)
+    x = uncover.iloc[ridx[:N]]
+    cout = cluster_compute(x, csize, outliers=False, pw_config=pw_config, msa_config=msa_config, workspace=workspace)
     cout['split'] = True
     df_c = df_c.append(cout[['id','sequence','split']])
     df_c['id'] = ['cluster'+str(i) for i in range(0,len(df_c))]
     return df_c 
 
-def cluster_split(df_q, df_c, th_s, N, csize, pw_config, msa_config, workspace):
-    logging.info('cluster_split: splitting clusters based on threshold = '+str(th_s))
-    df_c, df_align = cluster_eval(df_q, df_c, pw_config, workspace)
-    # mark clusters to split --> debug, try side cluster size?
-    df_a = bpy.get_best(df_align,['query_id'],metric='similarity',stat='idxmax')
-    df_c = df_c[df_c['id'].isin(df_a['database_id'])] # refresh cluster list
-    squeue = []
-    for cid, split in df_c[['id','split']].values:
-        v = df_a[df_a['database_id']==cid]['similarity'].values
-        p = np.percentile(v, 25) # debug, likely everything will get split
-        if p < th_s or split:
-            logging.info('cluster_split: cid='+cid+' p='+str(p)+' N='+str(len(v)))
-            squeue.append(cid)
+def cluster_split(df_q, df_c, N, csize, pw_config, msa_config, workspace):
+    df_c, df_align = cluster_eval(df_q, df_c, pw_config, workspace, cigar=True)
+    squeue = df_c[df_c['split']]['id'].values 
     # do the split
     keep = set(df_c['id'].astype(str)) - set(squeue)
     df_c = df_c[df_c['id'].isin([i for i in keep])]
@@ -630,6 +613,7 @@ def cluster_split(df_q, df_c, th_s, N, csize, pw_config, msa_config, workspace):
     df_align = df_align.merge(df_a[['query_id','best']],on='query_id',how='left')
     df_align['weight'] = df_align['similarity']/(df_align['similarity'] + df_align['best'])
     df_align.loc[df_align['weight'] > 0.5,'weight'] = 1
+    
     for i in range(0,len(squeue)):
         qout = squeue[i]
         logging.info('cluster_split: splitting on cid='+qout+' '+str(i)+'/'+str(len(squeue)))
@@ -638,13 +622,13 @@ def cluster_split(df_q, df_c, th_s, N, csize, pw_config, msa_config, workspace):
         qlist = df_q[df_q['id'].isin(qlist)]
         cout = cluster_compute(qlist, csize, outliers=False, pw_config=pw_config, msa_config=msa_config, workspace=workspace)
         # record cluster centers
-        cout['split']=False
+        cout['split']=False # debug --> if more than 1 cluster --> split again?
         df_c = df_c.append(cout[['id','sequence','split']])
     df_c['id'] = ['cluster'+str(i) for i in range(0,len(df_c))]
     return df_c 
 
 def cluster_merge(df_q, df_c, th_m, N, csize, pw_config, msa_config, workspace):
-    df_c, df_align = cluster_eval(df_q, df_c, pw_config, workspace)
+    df_c, df_align = cluster_eval(df_q, df_c, pw_config, workspace, cigar=True)
     # get the cosimilarity matrix
     vec = bpy.get_feature_vector(df_align[['query_id','database_id','AS']])
     cols = vec.columns[vec.columns!='id']
@@ -652,7 +636,9 @@ def cluster_merge(df_q, df_c, th_m, N, csize, pw_config, msa_config, workspace):
     cosim = bpy.dist_cosine(x.T, x.T)
     cosim = pd.DataFrame(cosim, columns=cols)
     cosim['id'] = cols
-    df_clst = bpy.cluster_hierarchical(cosim, metric='precomputed', linkage='complete', thresh=th_m)
+    #df_clst = bpy.cluster_hierarchical(cosim, metric='precomputed', linkage='complete', thresh=th_m)
+    df_clst = bpy.cluster_OPTICS(cosim, metric='precomputed', min_samples=2, max_eps=th_m)
+
     # clusters not to perform merge
     c = df_clst['cluster_id']== -1
     df_c = df_c[df_c['id'].isin(df_clst[c]['id'])]
@@ -661,16 +647,14 @@ def cluster_merge(df_q, df_c, th_m, N, csize, pw_config, msa_config, workspace):
     for cid in np.unique(df_clst[~c]['cluster_id']):
         x = df_clst[df_clst['cluster_id'] == cid]['id'].values
         mqueue.append([j for j in x])
-    
     # partition the sequences to each cluster
     df_align = bpy.get_best(df_align,['query_id'],metric='similarity',stat='idxmax')
-
     # merge clusters
     logging.info('cluster_merge: '+str(np.sum(~c))+'/'+str(len(df_c))+' clusters to merge')
     for i in range(0,len(mqueue)):
         mout = mqueue[i]
         logging.info('cluster_merge: doing merging on '+str(len(mout))+' clusters, '+str(i)+'/'+str(len(mqueue)))
-        qlist = cluster_subsample(df_align, mout, N=100, mode='sorted')
+        qlist = cluster_subsample(df_align, mout, N=100, mode='sorted',metric='AS')
         qlist = df_q[df_q['id'].isin(qlist)]
         cout = cluster_compute(qlist, csize, outliers=False, pw_config=pw_config, msa_config=msa_config, workspace=workspace)
         cout['split']=True
@@ -719,7 +703,8 @@ def cluster_compute(df_q, csize=20, metric='similarity', outliers=False, pw_conf
             return df_q[['id','sequence','outlier']]
         return pd.DataFrame([],columns=['id','sequence'])
     logging.info('cluster_compute: computing pairwise distance matrix')
-    df = bpy.run_minimap2(df_q, df_q, config=pw_config, workspace=workspace, cleanup=True)
+    config = pw_config+' --dual=no --for-only'
+    df = bpy.run_minimap2(df_q, df_q, config=config, workspace=workspace, cleanup=True)
 
     # catch error in case pairwise alignment fails
     if len(df) == 0:
@@ -849,7 +834,7 @@ def main():
             help='''fastq read size ranges to search for primers
     -fs 100-200             searches for fragments in reads of length 100-200bp
     -fs 100-200,500-900     searches for fragments in reads of length 100-200bp and 500-900bp''')
-    config['prfg_config']='-k5 -w1 --score-N 0 -s 20 -P'
+    config['prfg_config']='-k5 -w1 -s 20 -P'
     prfg_parser.add_argument('-c', dest='prfg_config', type=str, help='config passed to minimap2')
     prfg_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
     prfg_parser.add_argument('-r', dest='run_prfg', action='store_true', help='generate pseudo reference database now with the current configuration')
@@ -890,7 +875,7 @@ def main():
 
     # config for matching primers to reads
     fpmr_parser = subparser.add_parser('fpmr', help='suboptions for matching primers to consensus reads')
-    config['fpmr_config']='-k5 -w1 --score-N 0 -s 20 -P'
+    config['fpmr_config']='-k5 -w1 -s 20 -P --sr'
     fpmr_parser.add_argument('-c', dest='fpmr_config', help='config options passed to minimap2 aligner')
     fpmr_parser.add_argument('-i', dest='cons_file', help='input untrimmed consensus csv files')
     fpmr_parser.add_argument('-p', dest='primer_file', type=str,
@@ -915,7 +900,7 @@ def main():
     clst_parser.add_argument('-cs', dest='clst_csize', type=int, help='number of sequences from cluster center to multi-align into center sequence')
     config['clst_th_m']=0.9
     clst_parser.add_argument('-tm', dest='clst_th_m', type=float, help='threshold for marking clusters to merge')
-    config['clst_th_s']=0.9
+    config['clst_th_s']=2
     clst_parser.add_argument('-ts', dest='clst_th_s', type=float, help='threshold to mark clusters for splitting')
     config['clst_N']=2000
     clst_parser.add_argument('-N', dest='clst_N', type=int, help='size of sequence subsample')
@@ -925,7 +910,7 @@ def main():
     clst_parser.add_argument('-tout', dest='clst_iter_out', type=str, help='prefix of file to save cluster centers after each iteration')
     config['clst_track'] = False
     clst_parser.add_argument('--track', dest='clst_track', action='store_true', help='keep cluster centers after each iteration')
-    config['clst_pw_config']='-k15 -w10 -p 0.8 -D'
+    config['clst_pw_config']='-k15 -w10 -p 0.9 -D'
     clst_parser.add_argument('-pw_config', dest='clst_pw_config', type=str, help='config passed to minimap2')
     clst_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
     clst_parser.add_argument('-r', dest='run_clst', action='store_true', help='run clustering')

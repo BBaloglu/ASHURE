@@ -3,6 +3,7 @@
 */MISC/
 runs/
 ref/
+figures/
 basecalled_fastq/
 basecalled*/
 *.log

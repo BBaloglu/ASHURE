@@ -104,7 +104,7 @@ def main():
     elif args.aligner=='minimap2':
         print('Running minimap2')
         configs = '-k8 -w1 --score-N 0'
-        data=bpy.run_minimap2(A[['id','sequence']], B[['id','sequence']], workspace, configs, build_index=True, use_index=True)
+        data=bpy.run_minimap2(A[['id','sequence']], B[['id','sequence']], workspace, configs, cigar=True, build_index=True, use_index=True)
         metric = 'AS'
     subprocess.run(['rm','-r',workspace])
     print('Found ',len(data[data['database_id']!='*']),' matching sequences')
