@@ -556,7 +556,7 @@ def perform_cluster(df_q, df_d=[], max_iter=1, csize=20, N=2000, th_s=2, th_m=0.
         logging.info('perform_cluster: iter = '+str(k)+'/'+str(max_iter))
         df_c = cluster_split(df_q, df_c, N, csize, pw_config, msa_config, workspace)
         df_c = cluster_sweep(df_q, df_c, th_s, N, csize, pw_config, msa_config, workspace)
-        df_c = cluster_merge(df_q, df_c, th_m, N, csize, pw_config, msa_config, workspace)
+        #df_c = cluster_merge(df_q, df_c, th_m, 100, csize, pw_config, msa_config, workspace)
         # track progress
         if track_file!= '':
             import datetime
@@ -567,9 +567,11 @@ def perform_cluster(df_q, df_d=[], max_iter=1, csize=20, N=2000, th_s=2, th_m=0.
             df_c.to_csv(fname, index=False, compression='infer')
             track_file_list.append(fname)
     # final refinement
+    df_c = cluster_merge(df_q, df_c, th_m, 100, csize, pw_config, msa_config, workspace)
     df_c['split'] = True
-    df_c = cluster_split(df_q, df_c, N, csize, pw_config, msa_config, workspace)
-    df_c = cluster_merge(df_q, df_c, th_m, N, csize, pw_config, msa_config, workspace)
+    df_c = cluster_split(df_q, df_c, 500, csize, pw_config, msa_config, workspace)
+    df_c = cluster_merge(df_q, df_c, th_m, 100, csize, pw_config, msa_config, workspace)
+    df_c = cluster_merge(df_q, df_c, th_m, 100, csize, pw_config, msa_config, workspace)
     logging.info('perform_cluster: complete')
     return df_c, track_file_list
 
@@ -582,12 +584,15 @@ def cluster_eval(df_q, df_c, pw_config, workspace, cigar=True):
     return df_c, df_align
 
 def cluster_sweep(df_q, df_c, th_s, N, csize, pw_config, msa_config, workspace):
-    df_c, df_align = cluster_eval(df_q, df_c, pw_config, workspace, cigar=True)
+    df_c, df_align = cluster_eval(df_q, df_c, pw_config, workspace, cigar=False)
+    # normalize s1
+    df_a = bpy.get_best(df_align, ['database_id'], metric='s1', stat='idxmax').rename(columns={'s1':'b1'})
+    df_align = df_align.merge(df_a[['database_id','b1']],on='database_id',how='left')
+    df_align['m1'] = df_align['s1']/df_align['b1']
     # partition and get lower quartile # debug
-    df_align = bpy.get_best(df_align,['query_id'],metric='similarity',stat='idxmax')
+    df_align = bpy.get_best(df_align,['query_id'],metric='m1',stat='idxmax')
     df_align = df_align.rename(columns={'query_id':'id'})
-    # stratify
-    x = bpy.cluster_Kmeans(df_align[['id','match_score']], n_clusters=4, n_init=10, n_iter=100, ordered=True)
+    x = bpy.cluster_Kmeans(df_align[['id','m1']], n_clusters=4, n_init=10, n_iter=100, ordered=True)
     c = x['cluster_id'] <= th_s # get bad alignments
     uncover = set(df_q['id'].astype(str)) - set(x[~c]['id'].astype(str))
     uncover = df_q[df_q['id'].isin([i for i in uncover])]
@@ -602,44 +607,44 @@ def cluster_sweep(df_q, df_c, th_s, N, csize, pw_config, msa_config, workspace):
     return df_c 
 
 def cluster_split(df_q, df_c, N, csize, pw_config, msa_config, workspace):
-    df_c, df_align = cluster_eval(df_q, df_c, pw_config, workspace, cigar=True)
+    df_c, df_align = cluster_eval(df_q, df_c, pw_config, workspace, cigar=False)
     squeue = df_c[df_c['split']]['id'].values 
-    # do the split
+    # mark clusters for splitting
     keep = set(df_c['id'].astype(str)) - set(squeue)
     df_c = df_c[df_c['id'].isin([i for i in keep])]
     # add weights for semi random sampling
-    df_a = bpy.get_best(df_align,['query_id'],metric='similarity',stat='idxmax')
-    df_a = df_a.rename(columns={'AS':'best'})
-    df_align = df_align.merge(df_a[['query_id','best']],on='query_id',how='left')
-    df_align['weight'] = df_align['AS']/(df_align['AS'] + df_align['best'])
-    df_align.loc[df_align['best'] <= 0,'weight'] = 0
+    df_a = bpy.get_best(df_align,['query_id'],metric='s1',stat='idxmax')
+    df_a = df_a.rename(columns={'s1':'b1'})
+    df_align = df_align.merge(df_a[['query_id','b1']],on='query_id',how='left')
+    df_align['weight'] = df_align['s1']/(df_align['s1'] + df_align['b1'])
+    df_align.loc[df_align['b1'] <= 0,'weight'] = 0
     df_align.loc[df_align['weight'] > 0.5,'weight'] = 1
-
+    # do the split
     for i in range(0,len(squeue)):
         qout = squeue[i]
         logging.info('cluster_split: splitting on cid='+qout+' '+str(i)+'/'+str(len(squeue)))
         # subsample
-        qlist = cluster_subsample(df_align, [qout], N=N, mode='semi')
+        qlist = cluster_subsample(df_align, [qout], N=N, mode='semi', metric='s1')
         qlist = df_q[df_q['id'].isin(qlist)]
         cout = cluster_compute(qlist, csize, outliers=False, pw_config=pw_config, msa_config=msa_config, workspace=workspace)
         # record cluster centers
-        cout['split']=False # debug --> if more than 1 cluster --> split again?
+        cout['split'] = False
+        if len(cout) > 1:
+            cout['split'] = True
         df_c = df_c.append(cout[['id','sequence','split']])
     df_c['id'] = ['cluster'+str(i) for i in range(0,len(df_c))]
     return df_c 
 
 def cluster_merge(df_q, df_c, th_m, N, csize, pw_config, msa_config, workspace):
-    df_c, df_align = cluster_eval(df_q, df_c, pw_config, workspace, cigar=True)
+    df_c, df_align = cluster_eval(df_q, df_c, pw_config, workspace, cigar=False)
     # get the cosimilarity matrix
-    vec = bpy.get_feature_vector(df_align[['query_id','database_id','AS']])
+    vec = bpy.get_feature_vector(df_align[['query_id','database_id','s1']])
     cols = vec.columns[vec.columns!='id']
     x = vec[cols].values
     cosim = bpy.dist_cosine(x.T, x.T)
     cosim = pd.DataFrame(cosim, columns=cols)
     cosim['id'] = cols
-    #df_clst = bpy.cluster_hierarchical(cosim, metric='precomputed', linkage='complete', thresh=th_m)
     df_clst = bpy.cluster_OPTICS(cosim, metric='precomputed', min_samples=2, max_eps=th_m)
-
     # clusters not to perform merge
     c = df_clst['cluster_id']== -1
     df_c = df_c[df_c['id'].isin(df_clst[c]['id'])]
@@ -648,14 +653,19 @@ def cluster_merge(df_q, df_c, th_m, N, csize, pw_config, msa_config, workspace):
     for cid in np.unique(df_clst[~c]['cluster_id']):
         x = df_clst[df_clst['cluster_id'] == cid]['id'].values
         mqueue.append([j for j in x])
+    # normalize s1
+    df_a = bpy.get_best(df_align, ['database_id'], metric='s1', stat='idxmax').rename(columns={'s1':'b1'})
+    df_align = df_align.merge(df_a[['database_id','b1']],on='database_id',how='left')
+    df_align['m1'] = df_align['s1']/df_align['b1']
     # partition the sequences to each cluster
-    df_align = bpy.get_best(df_align,['query_id'],metric='similarity',stat='idxmax')
+    df_align = bpy.get_best(df_align,['query_id'],metric='m1',stat='idxmax')
+
     # merge clusters
     logging.info('cluster_merge: '+str(np.sum(~c))+'/'+str(len(df_c))+' clusters to merge')
     for i in range(0,len(mqueue)):
         mout = mqueue[i]
         logging.info('cluster_merge: doing merging on '+str(len(mout))+' clusters, '+str(i)+'/'+str(len(mqueue)))
-        qlist = cluster_subsample(df_align, mout, N=100, mode='sorted',metric='AS')
+        qlist = cluster_subsample(df_align, mout, N=N, mode='sorted',metric='m1')
         qlist = df_q[df_q['id'].isin(qlist)]
         cout = cluster_compute(qlist, csize, outliers=False, pw_config=pw_config, msa_config=msa_config, workspace=workspace)
         cout['split']=True
@@ -901,7 +911,7 @@ def main():
     clst_parser.add_argument('-cs', dest='clst_csize', type=int, help='number of sequences from cluster center to multi-align into center sequence')
     config['clst_th_m']=0.9
     clst_parser.add_argument('-tm', dest='clst_th_m', type=float, help='threshold for marking clusters to merge')
-    config['clst_th_s']=2
+    config['clst_th_s']=0
     clst_parser.add_argument('-ts', dest='clst_th_s', type=float, help='threshold to mark clusters for splitting')
     config['clst_N']=2000
     clst_parser.add_argument('-N', dest='clst_N', type=int, help='size of sequence subsample')

@@ -1,6 +1,6 @@
 # ignore output from bowtie
 */__pycache__/
-*/MISC/
+*/dev/
 runs/
 ref/
 figures/
