@@ -126,6 +126,7 @@ def main():
     print(len(A['id']) - len(np.unique(data['query_id'])), 'unmatched')
     # save the data
     print('Saving data to',args.acc_file)
+    data = data.sort_values(by=['database_id','query_id'])
     data.to_csv(args.acc_file, index=False, compression='infer')
     print('Elapse=',time.time()-start)
 

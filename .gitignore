@@ -13,10 +13,6 @@ basecalled*/
 *.index*
 *.mmi
 *.bt2
-*.fasta
-*.fastq
-*.fa
-*.fq
 *.msa_out
 *.spoa_out
 */frags/

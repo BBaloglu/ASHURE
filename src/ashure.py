@@ -609,11 +609,12 @@ def cluster_split(df_q, df_c, N, csize, pw_config, msa_config, workspace):
     df_c = df_c[df_c['id'].isin([i for i in keep])]
     # add weights for semi random sampling
     df_a = bpy.get_best(df_align,['query_id'],metric='similarity',stat='idxmax')
-    df_a = df_a.rename(columns={'similarity':'best'})
+    df_a = df_a.rename(columns={'AS':'best'})
     df_align = df_align.merge(df_a[['query_id','best']],on='query_id',how='left')
-    df_align['weight'] = df_align['similarity']/(df_align['similarity'] + df_align['best'])
+    df_align['weight'] = df_align['AS']/(df_align['AS'] + df_align['best'])
+    df_align.loc[df_align['best'] <= 0,'weight'] = 0
     df_align.loc[df_align['weight'] > 0.5,'weight'] = 1
-    
+
     for i in range(0,len(squeue)):
         qout = squeue[i]
         logging.info('cluster_split: splitting on cid='+qout+' '+str(i)+'/'+str(len(squeue)))
@@ -875,7 +876,7 @@ def main():
 
     # config for matching primers to reads
     fpmr_parser = subparser.add_parser('fpmr', help='suboptions for matching primers to consensus reads')
-    config['fpmr_config']='-k5 -w1 -s 20 -P --sr'
+    config['fpmr_config']='-k5 -w1 -s 20 -P'
     fpmr_parser.add_argument('-c', dest='fpmr_config', help='config options passed to minimap2 aligner')
     fpmr_parser.add_argument('-i', dest='cons_file', help='input untrimmed consensus csv files')
     fpmr_parser.add_argument('-p', dest='primer_file', type=str,
@@ -991,9 +992,12 @@ def main():
             sys.exit(1)
         reads = bpy.load_ONT_fastq(config['fastq'], low_mem=config['low_mem'])
         # exclude reads which already have hits
-        exclude = pd.concat([pd.read_csv(f) for f in config['exclude']])
-        reads = reads[reads['id'].isin(exclude['query_id'])]
-        del exclude
+        if len(config['exclude']) > 0:
+            L1 = len(reads)
+            exclude = pd.concat([pd.read_csv(f) for f in config['exclude']])
+            reads = reads[reads['id'].isin(exclude['query_id'])]
+            del exclude
+            logging.info('searching subset '+str(len(reads))+'/'+str(L1))
     
     # run pseudo reference database generator if selected
     if config['run_prfg']:
@@ -1074,7 +1078,6 @@ def main():
         # run the trimming operation
         logging.info('Trimming the reads')
         df = trim_consensus(df_pmatch, df_cons)
-        df = df.merge(df_cons[['id','N frags']], on = 'id', how = 'left')
 
         # Write the data to file
         logging.info('Writing trimmed consensus sequence')
