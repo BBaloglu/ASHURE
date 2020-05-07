@@ -556,7 +556,7 @@ def perform_cluster(df_q, df_d=[], max_iter=1, csize=20, N=2000, th_s=2, th_m=0.
         logging.info('perform_cluster: iter = '+str(k)+'/'+str(max_iter))
         df_c = cluster_split(df_q, df_c, N, csize, pw_config, msa_config, workspace)
         df_c = cluster_sweep(df_q, df_c, th_s, N, csize, pw_config, msa_config, workspace)
-        #df_c = cluster_merge(df_q, df_c, th_m, 100, csize, pw_config, msa_config, workspace)
+        df_c = cluster_merge(df_q, df_c, th_m, 100, csize, pw_config, msa_config, workspace)
         # track progress
         if track_file!= '':
             import datetime
@@ -567,7 +567,6 @@ def perform_cluster(df_q, df_d=[], max_iter=1, csize=20, N=2000, th_s=2, th_m=0.
             df_c.to_csv(fname, index=False, compression='infer')
             track_file_list.append(fname)
     # final refinement
-    df_c = cluster_merge(df_q, df_c, th_m, 100, csize, pw_config, msa_config, workspace)
     df_c['split'] = True
     df_c = cluster_split(df_q, df_c, 500, csize, pw_config, msa_config, workspace)
     df_c = cluster_merge(df_q, df_c, th_m, 100, csize, pw_config, msa_config, workspace)
@@ -592,8 +591,8 @@ def cluster_sweep(df_q, df_c, th_s, N, csize, pw_config, msa_config, workspace):
     # partition and get lower quartile # debug
     df_align = bpy.get_best(df_align,['query_id'],metric='m1',stat='idxmax')
     df_align = df_align.rename(columns={'query_id':'id'})
-    x = bpy.cluster_Kmeans(df_align[['id','m1']], n_clusters=4, n_init=10, n_iter=100, ordered=True)
-    c = x['cluster_id'] <= th_s # get bad alignments
+    x = bpy.cluster_Kmeans(df_align[['id','m1']], n_clusters=th_s, n_init=10, n_iter=100, ordered=True)
+    c = x['cluster_id'] == 0 # get bad alignments
     uncover = set(df_q['id'].astype(str)) - set(x[~c]['id'].astype(str))
     uncover = df_q[df_q['id'].isin([i for i in uncover])]
     logging.info('cluster_sweep: uncovered '+str(len(uncover))+'/'+str(len(df_q)))
@@ -911,8 +910,8 @@ def main():
     clst_parser.add_argument('-cs', dest='clst_csize', type=int, help='number of sequences from cluster center to multi-align into center sequence')
     config['clst_th_m']=0.9
     clst_parser.add_argument('-tm', dest='clst_th_m', type=float, help='threshold for marking clusters to merge')
-    config['clst_th_s']=0
-    clst_parser.add_argument('-ts', dest='clst_th_s', type=float, help='threshold to mark clusters for splitting')
+    config['clst_th_s']=4
+    clst_parser.add_argument('-ts', dest='clst_th_s', type=float, help='how many partition to split the sequences for sweep')
     config['clst_N']=2000
     clst_parser.add_argument('-N', dest='clst_N', type=int, help='size of sequence subsample')
     config['clst_N_iter']=10
