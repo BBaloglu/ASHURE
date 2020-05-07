@@ -570,7 +570,6 @@ def perform_cluster(df_q, df_d=[], max_iter=1, csize=20, N=2000, th_s=2, th_m=0.
     df_c['split'] = True
     df_c = cluster_split(df_q, df_c, 500, csize, pw_config, msa_config, workspace)
     df_c = cluster_merge(df_q, df_c, th_m, 100, csize, pw_config, msa_config, workspace)
-    df_c = cluster_merge(df_q, df_c, th_m, 100, csize, pw_config, msa_config, workspace)
     logging.info('perform_cluster: complete')
     return df_c, track_file_list
 
@@ -617,7 +616,7 @@ def cluster_split(df_q, df_c, N, csize, pw_config, msa_config, workspace):
     df_align = df_align.merge(df_a[['query_id','b1']],on='query_id',how='left')
     df_align['weight'] = df_align['s1']/(df_align['s1'] + df_align['b1'])
     df_align.loc[df_align['b1'] <= 0,'weight'] = 0
-    df_align.loc[df_align['weight'] > 0.5,'weight'] = 1
+    df_align.loc[df_align['weight'] >= 0.5,'weight'] = 1
     # do the split
     for i in range(0,len(squeue)):
         qout = squeue[i]
@@ -652,19 +651,19 @@ def cluster_merge(df_q, df_c, th_m, N, csize, pw_config, msa_config, workspace):
     for cid in np.unique(df_clst[~c]['cluster_id']):
         x = df_clst[df_clst['cluster_id'] == cid]['id'].values
         mqueue.append([j for j in x])
-    # normalize s1
-    df_a = bpy.get_best(df_align, ['database_id'], metric='s1', stat='idxmax').rename(columns={'s1':'b1'})
-    df_align = df_align.merge(df_a[['database_id','b1']],on='database_id',how='left')
-    df_align['m1'] = df_align['s1']/df_align['b1']
-    # partition the sequences to each cluster
-    df_align = bpy.get_best(df_align,['query_id'],metric='m1',stat='idxmax')
-
+    # add weights for semi random sampling
+    df_a = bpy.get_best(df_align,['query_id'],metric='s1',stat='idxmax')
+    df_a = df_a.rename(columns={'s1':'b1'})
+    df_align = df_align.merge(df_a[['query_id','b1']],on='query_id',how='left')
+    df_align['weight'] = df_align['s1']/(df_align['s1'] + df_align['b1'])
+    df_align.loc[df_align['b1'] <= 0,'weight'] = 0
+    df_align.loc[df_align['weight'] >= 0.5,'weight'] = 1
     # merge clusters
     logging.info('cluster_merge: '+str(np.sum(~c))+'/'+str(len(df_c))+' clusters to merge')
     for i in range(0,len(mqueue)):
         mout = mqueue[i]
         logging.info('cluster_merge: doing merging on '+str(len(mout))+' clusters, '+str(i)+'/'+str(len(mqueue)))
-        qlist = cluster_subsample(df_align, mout, N=N, mode='sorted',metric='m1')
+        qlist = cluster_subsample(df_align, mout, N=N, mode='semi',metric='s1')
         qlist = df_q[df_q['id'].isin(qlist)]
         cout = cluster_compute(qlist, csize, outliers=False, pw_config=pw_config, msa_config=msa_config, workspace=workspace)
         cout['split']=True
