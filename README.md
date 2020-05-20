@@ -111,12 +111,12 @@ Example usage from the clustering module
 ```
 
 ## Library
-`bilge_pype.py` contains several functions you may find useful for parsing and calling commonly used alignment tools. See the [demos](https://github.com/bbaloglu/ashure/demos) folder for how some of these functiosn are used.
+`bilge_pype.py` contains several functions you may find useful for parsing and calling commonly used alignment tools. See the [demos](https://github.com/bbaloglu/ashure/demos) folder for how some of these functions are used.
 
 ## Contact information
-Submit help and bug reports to me via twitter.
 
-Follow and tweet to: [@bilgeMolEcol](https://twitter.com/bilgeMolEcol)
+Contact via email: bilgenurb@gmail.com or twitter: [@bilgeMolEcol](https://twitter.com/bilgeMolEcol)
 
 ## Acknowledgement
-Thank you thank you me. I am the best. They dont call me the wise for nothing.
+This study was supported by funding through the Canada First Research Excellence Fund. This work represents a contribution to the University of Guelph Food From Thought research program.  
+
