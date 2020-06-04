@@ -98,7 +98,7 @@ def main():
         metric = 'AS'
     elif args.aligner=='bwa':
         print('Running bwa')
-        configs = 'mem -a'
+        configs = 'mem -a -L 100'
         data = bpy.run_bwa(A[['id','sequence']], B[['id','sequence']], workspace, configs)
         metric = 'AS'
     elif args.aligner=='minimap2':

@@ -4,6 +4,7 @@
 
 # Loading libraries
 import numpy as np
+import scipy as sp
 import pandas as pd
 
 # For interfacing with the file system
@@ -108,7 +109,8 @@ def find_RCA_frags(ref, reads, block=10000, output='./frags/', config=''):
         frags = bpy.run_minimap2(reads, ref, workspace=workspace, config=config, cigar=True, build_index=build_index, use_index=True)
         build_index = False
         logging.info('Saving information')
-        frags.to_csv(output+'fraginfo_'+str(i)+'.csv.gz', index=False, compression='infer')
+        if len(frags) > 0:
+            frags.to_csv(output+'fraginfo_'+str(i)+'.csv.gz', index=False, compression='infer')
         logging.info('frags found in this block = '+str(len(frags)))
     # clear the work folder
     subprocess.run(['rm','-r',workspace]) # remove the aligner folder after work is done
@@ -530,7 +532,6 @@ def trim_consensus(df_pmatch, df_cons):
     
     df = pd.DataFrame(out, columns=['id','fwd_primer_seq','consensus','rev_primer_seq'])
     return df.merge(df_cons[['id','N frags','msa_input_file']])
-    #return df.merge(df_cons[['id','N frags']])
 
 def perform_cluster(df_q, df_d=[], max_iter=1, csize=20, N=2000, th_s=2, th_m=0.9, pw_config='', msa_config='', workspace='./cluster/', track_file='', timestamp=True):
     '''
@@ -568,7 +569,7 @@ def perform_cluster(df_q, df_d=[], max_iter=1, csize=20, N=2000, th_s=2, th_m=0.
             track_file_list.append(fname)
     # final refinement
     df_c['split'] = True
-    df_c = cluster_split(df_q, df_c, 500, csize, pw_config, msa_config, workspace)
+    df_c = cluster_split(df_q, df_c, 200, csize, pw_config, msa_config, workspace)
     df_c = cluster_merge(df_q, df_c, th_m, 100, csize, pw_config, msa_config, workspace)
     logging.info('perform_cluster: complete')
     return df_c, track_file_list
@@ -611,12 +612,7 @@ def cluster_split(df_q, df_c, N, csize, pw_config, msa_config, workspace):
     keep = set(df_c['id'].astype(str)) - set(squeue)
     df_c = df_c[df_c['id'].isin([i for i in keep])]
     # add weights for semi random sampling
-    df_a = bpy.get_best(df_align,['query_id'],metric='s1',stat='idxmax')
-    df_a = df_a.rename(columns={'s1':'b1'})
-    df_align = df_align.merge(df_a[['query_id','b1']],on='query_id',how='left')
-    df_align['weight'] = df_align['s1']/(df_align['s1'] + df_align['b1'])
-    df_align.loc[df_align['b1'] <= 0,'weight'] = 0
-    df_align.loc[df_align['weight'] >= 0.5,'weight'] = 1
+    df_align['weight'] = cluster_weight(df_align, metric='s1')
     # do the split
     for i in range(0,len(squeue)):
         qout = squeue[i]
@@ -634,9 +630,9 @@ def cluster_split(df_q, df_c, N, csize, pw_config, msa_config, workspace):
     return df_c 
 
 def cluster_merge(df_q, df_c, th_m, N, csize, pw_config, msa_config, workspace):
-    df_c, df_align = cluster_eval(df_q, df_c, pw_config, workspace, cigar=False)
+    df_c, df_align = cluster_eval(df_q, df_c, pw_config, workspace, cigar=True)
     # get the cosimilarity matrix
-    vec = bpy.get_feature_vector(df_align[['query_id','database_id','s1']])
+    vec = bpy.get_feature_vector(df_align[['query_id','database_id','AS']])
     cols = vec.columns[vec.columns!='id']
     x = vec[cols].values
     cosim = bpy.dist_cosine(x.T, x.T)
@@ -651,25 +647,25 @@ def cluster_merge(df_q, df_c, th_m, N, csize, pw_config, msa_config, workspace):
     for cid in np.unique(df_clst[~c]['cluster_id']):
         x = df_clst[df_clst['cluster_id'] == cid]['id'].values
         mqueue.append([j for j in x])
-    # add weights for semi random sampling
-    df_a = bpy.get_best(df_align,['query_id'],metric='s1',stat='idxmax')
-    df_a = df_a.rename(columns={'s1':'b1'})
-    df_align = df_align.merge(df_a[['query_id','b1']],on='query_id',how='left')
-    df_align['weight'] = df_align['s1']/(df_align['s1'] + df_align['b1'])
-    df_align.loc[df_align['b1'] <= 0,'weight'] = 0
-    df_align.loc[df_align['weight'] >= 0.5,'weight'] = 1
+    df_align['weight'] = cluster_weight(df_align, metric='AS')
     # merge clusters
     logging.info('cluster_merge: '+str(np.sum(~c))+'/'+str(len(df_c))+' clusters to merge')
     for i in range(0,len(mqueue)):
         mout = mqueue[i]
         logging.info('cluster_merge: doing merging on '+str(len(mout))+' clusters, '+str(i)+'/'+str(len(mqueue)))
-        qlist = cluster_subsample(df_align, mout, N=N, mode='semi',metric='s1')
+        qlist = cluster_subsample(df_align, mout, N=N, mode='sorted',metric='AS')
         qlist = df_q[df_q['id'].isin(qlist)]
         cout = cluster_compute(qlist, csize, outliers=False, pw_config=pw_config, msa_config=msa_config, workspace=workspace)
         cout['split']=True
         df_c = df_c.append(cout[['id','sequence','split']])
     df_c['id'] = ['cluster'+str(i) for i in range(0,len(df_c))]
     return df_c
+
+def cluster_weight(df_align, metric='s1'):
+    df_a = bpy.get_best(df_align, ['query_id'], metric=metric, stat='idxmax').rename(columns={metric:'b1'})
+    df_align = df_align.merge(df_a[['query_id','b1']],on='query_id',how='left')
+    w = df_align[metric]/(df_align[metric] + df_align['b1'])
+    return w
 
 def cluster_subsample(df_align, dlist, N=100, mode='sorted', metric='AS'):
     df_align = df_align.sort_values(by=['database_id',metric])[::-1] # set to high value first
@@ -681,12 +677,15 @@ def cluster_subsample(df_align, dlist, N=100, mode='sorted', metric='AS'):
             qlist = v[ridx[:N]]
         elif mode=='semi':
             v = df_align[df_align['database_id']==d][['query_id','weight']].values
-            c = v[:,1] > np.random.rand(len(v)) # weight probability on alignment 
-            v = v[c]
-            qlist = v[:N,0]
+            v[v[:,1] >= 0.5, 1] = 1
+            v = v[v[:,1] > np.random.rand(len(v))] # weight probability on alignment
+            ridx = np.random.permutation(len(v))
+            qlist = v[ridx[:N],0]
         else:
-            v = df_align[df_align['database_id']==d]['query_id'].values
-            qlist = v[:N]
+            v = df_align[df_align['database_id']==d][['query_id','weight']].values
+            v[v[:,1] >= 0.5, 1] = 1
+            v = v[v[:,1] > np.random.rand(len(v))] # weight probability on alignment
+            qlist = v[:N,0]
         x+= [q for q in qlist]
     return np.unique(x)
 
@@ -1003,7 +1002,7 @@ def main():
         if len(config['exclude']) > 0:
             L1 = len(reads)
             exclude = pd.concat([pd.read_csv(f) for f in config['exclude']])
-            reads = reads[reads['id'].isin(exclude['query_id'])]
+            reads = reads[reads['id'].isin(exclude['query_id'])==False]
             del exclude
             logging.info('searching subset '+str(len(reads))+'/'+str(L1))
     
