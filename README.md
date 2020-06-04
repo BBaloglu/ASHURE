@@ -12,13 +12,13 @@
 ```
 
 # ASHURE
-A Sure Heuristic under Random events - A Python based toolkit for analysis of environmental DNA from nanopore sequencing.
+A Sure Heuristic under Random events - A Python based toolkit for analysis of bulk environmental DNA from nanopore sequencing.
 
-ASHURE is designed for analysis of linear consensus or 1d2 like fastq data from nanopore sequencing devices. Library preparation procedure such as rolling circle amplification (RCA) generate ssDNA containing repeats of their originating template. When these concatemers are read by a nanopore sequencing device, the repetative regions can be realigned to generate a more error free consensus.
+ASHURE is designed for analysis of linear consensus or 1d2 like fastq data from nanopore sequencing devices. Library preparation procedures such as rolling circle amplification (RCA) generate ssDNA containing repeats of their originating template. When these concatemers are read by a nanopore sequencing device, the repetative regions can be realigned to generate a more error free consensus.
 
-ASHURE works by leveraging priori information about the amplicon such as primers used, reference database of related sequences, and amplicon size to find, align, and generate a polished consensus read. Reference sequences do not have to match the amplicon, just similar enough (70-80 percent identity) for fuzzy kmer based alignment.
+ASHURE works by leveraging priori information about the amplicon such as primers used, reference database of related sequences, and amplicon size to find, align, and generate a polished consensus read. Reference sequences do not have to match the amplicon, it is enough for them to be just similar enough (70-80 percent identity) for fuzzy kmer based alignment.
 
-The sensitivity and speed of the pipeline is dependent on the quality of the reference or pseudo reference used. Searching large libraries will take time and compute effort is sometimes wasted on comparing against unrelated or redundant sequences. A bad reference sequences will result in poor alignments that contaminate multi-alignment. The best results are obtain by searching  against a compact but accurate database of reference sequences relevant to your raw fastq data. The tools and steps for generating good pseudo reference sequences are shown in [pseudo_references.ipynb](https://github.com/bbaloglu/ashure/demos/pseudo_references.ipynb).
+The sensitivity and speed of the pipeline is dependent on the quality of the reference or pseudo reference used. Searching large libraries will take time and compute effort is sometimes wasted on comparing against unrelated or redundant sequences. Bad reference sequences will result in poor alignments that contaminate multi-alignment. The best results are obtained by searching against a compact but accurate database of reference sequences relevant to your raw fastq data. The tools and steps for generating good pseudo reference sequences are shown in [pseudo_references.ipynb](https://github.com/bbaloglu/ashure/demos/pseudo_references.ipynb).
 
 Sequence clusters are generated in the last step of the pipeline using a density based clustering approach called OPTICS. Traditional OTU thresholding approaches do not work with nanopore data because the error profile of each read is unpredictable. Density based clustering is more suited for these situations because OTU boundaries are adaptively called based on the divergence in local sequence identity. This method requires sufficient coverage around a true amplicon for clustering to work. An interative demo of how this approach works can be found in [clustering.ipynb](https://github.com/bbaloglu/ashure/demos/clustering.ipynb).
 
@@ -112,6 +112,14 @@ Example usage from the clustering module
 
 ## Library
 `bilge_pype.py` contains several functions you may find useful for parsing and calling commonly used alignment tools. See the [demos](https://github.com/bbaloglu/ashure/demos) folder for how some of these functions are used.
+
+## Citing ASHURE
+
+Read our preprint here: https://www.biorxiv.org/content/10.1101/2020.05.21.108852v1.full.pdf
+
+If you use ASHURE in your work, please cite:
+
+    Baloğlu, B. et al. (2020). “A Workflow for Accurate Metabarcoding Using Nanopore MinION Sequencing.” bioRxiv: 2020.05.21.108852. http://biorxiv.org/content/early/2020/05/25/2020.05.21.108852
 
 ## Contact information
 
