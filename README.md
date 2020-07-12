@@ -18,9 +18,9 @@ ASHURE is designed for analysis of linear consensus or 1d2 like fastq data from 
 
 ASHURE works by leveraging priori information about the amplicon such as primers used, reference database of related sequences, and amplicon size to find, align, and generate a polished consensus read. Reference sequences do not have to match the amplicon, it is enough for them to be just similar enough (70-80 percent identity) for fuzzy kmer based alignment.
 
-The sensitivity and speed of the pipeline is dependent on the quality of the reference or pseudo reference used. Searching large libraries will take time and compute effort is sometimes wasted on comparing against unrelated or redundant sequences. Bad reference sequences will result in poor alignments that contaminate multi-alignment. The best results are obtained by searching against a compact but accurate database of reference sequences relevant to your raw fastq data. The tools and steps for generating good pseudo reference sequences are shown in [pseudo_references.ipynb](https://github.com/bbaloglu/ashure/demos/pseudo_references.ipynb).
+The sensitivity and speed of the pipeline is dependent on the quality of the reference or pseudo reference used. Searching large libraries will take time and compute effort is sometimes wasted on comparing against unrelated or redundant sequences. Bad reference sequences will result in poor alignments that contaminate multi-alignment. The best results are obtained by searching against a compact but accurate database of reference sequences relevant to your raw fastq data. The tools and steps for generating good pseudo reference sequences are shown in [pseudo_references.ipynb](https://github.com/bbaloglu/ashure/demo/pseudo_references.ipynb).
 
-Sequence clusters are generated in the last step of the pipeline using a density based clustering approach called OPTICS. Traditional OTU thresholding approaches do not work with nanopore data because the error profile of each read is unpredictable. Density based clustering is more suited for these situations because OTU boundaries are adaptively called based on the divergence in local sequence identity. This method requires sufficient coverage around a true amplicon for clustering to work. An interative demo of how this approach works can be found in [clustering.ipynb](https://github.com/bbaloglu/ashure/demos/clustering.ipynb).
+Sequence clusters are generated in the last step of the pipeline using a density based clustering approach called OPTICS. Traditional OTU thresholding approaches do not work with nanopore data because the error profile of each read is unpredictable. Density based clustering is more suited for these situations because OTU boundaries are adaptively called based on the divergence in local sequence identity. This method requires sufficient coverage around a true amplicon for clustering to work. An interative demo of how this approach works can be found in [clustering.ipynb](https://github.com/bbaloglu/ashure/demo/clustering.ipynb).
 
 Read polishing with medaka, nanopolish, or racon is supported by our pipeline. Our toolkit only prepares input data for these tools. A demo of this process is shown in [polishing](https://github.com/bbaloglu/ashure/polishing.ipynb).
 
@@ -123,7 +123,7 @@ If you use ASHURE in your work, please cite:
 
 ## Contact information
 
-Contact via email: bilgenurb@gmail.com or twitter: [@bilgeMolEcol](https://twitter.com/bilgeMolEcol)
+If you experience any issues with the code, please post them on the issues section. We will get back to you. 
 
 ## Acknowledgement
 This study was supported by funding through the Canada First Research Excellence Fund. This work represents a contribution to the University of Guelph Food From Thought research program.  
