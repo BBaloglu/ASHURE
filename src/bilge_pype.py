@@ -72,10 +72,12 @@ def add_ONT_header(df):
     return df
 
 # Function to load fastq data and primer info
-def load_ONT_fastq(files, low_mem=False):
+def load_ONT_fastq(files, low_mem=False, header=False):
     '''
     Function to load fastq info from list of ONT fastq files
     files = list of fastq files
+    low_mem = store seek indices instead of strings to save on memory
+    header = keep original header from fastq files
     output = pandas dataframe of ONT fastq info
     '''
     # Generate table of sequences via iteration
@@ -88,6 +90,8 @@ def load_ONT_fastq(files, low_mem=False):
             logging.info('elapse = {0:.2f}'.format(time.time()-start)+'s')
     df = pd.concat(df) # Merge all the tables
     logging.info('adding ONT header info')
+    if header:
+        df['header'] = df['id'].values
     df = add_ONT_header(df)
     # add sequence length info
     if 'rlen' in df.columns:
@@ -1768,8 +1772,7 @@ def stats_group_data(df, groups = None):
             data.append([g, [-1]])
     return data
 
-def mpl_violin(ax, data, groups=None, vert=False, alpha=0.5,
-               face_color='gray', edge_color='black'):
+def mpl_violin(ax, data, groups=None, vert=False, labels=False, alpha=0.5, face_color='gray', edge_color='black'):
     '''
     Use matplotlib to make violin plots
     axis = axis handle obtained via plt.gca()
@@ -1784,8 +1787,6 @@ def mpl_violin(ax, data, groups=None, vert=False, alpha=0.5,
     d = stats_group_data(data, groups)
 
     # make the violin plot
-    labels = []
-    y = []
     for i in range(0,len(d)):
         if len(d[i][1]) > 1:
             x = np.array(d[i][1]).astype(float)
@@ -1795,10 +1796,20 @@ def mpl_violin(ax, data, groups=None, vert=False, alpha=0.5,
                 pc.set_facecolor(face_color)
                 pc.set_edgecolor(edge_color)
                 pc.set_alpha(alpha)
+    
+    if labels:
+        inds = []
+        L = []
+        for i in range(0,len(d)):
+            inds.append(i)
+            L.append(d[i][0])
+        L = np.array(L)
+        if vert:
+            mpl_set_xaxis(ax, inds, L)
+        elif ~vert:
+            mpl_set_yaxis(ax, inds, L)
 
-def mpl_box_whisker(ax, data, groups=None, vert=False, alpha=1, median_color='white',
-                    cmap=['gray'], text_x_offset=0, text_y=None, 
-                    counts=False, labels=False):
+def mpl_box_whisker(ax, data, groups=None, vert=False, alpha=1, median_color='white', cmap=['gray'], text_x_offset=0, text_y=None, counts=False, labels=False):
     '''
     Use matplotlib to make box whisker plot
     axis = axis handle obtained via plt.gca()
