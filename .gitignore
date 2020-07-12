@@ -8,6 +8,7 @@ basecalled_fastq/
 basecalled*/
 demo/*.py
 debug/
+docs/
 *.log
 *.bam
 *.sam
