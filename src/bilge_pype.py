@@ -310,9 +310,9 @@ def load_file(fname):
         if '.csv' in fname:
             ref = pd.read_csv(fname)
         elif '.fa' in fname or '.fasta' in fname:
-            ref = bpy.read_fasta(fname)
+            ref = read_fasta(fname)
         elif '.fq' in fname or '.fastq' in fname:
-            ref = bpy.read_fastq(fname)
+            ref = read_fastq(fname)
         return ref
     else:
         logging.info('Failed to load '+fname)

@@ -109,7 +109,7 @@ Example usage from the clustering module
 ```
 
 ## Library
-`bilge_pype.py` contains several functions you may find useful for parsing and calling commonly used alignment tools. See the [demos](https://github.com/bbaloglu/ashure/demos) folder for how some of these functions are used.
+`bilge_pype.py` contains several functions you may find useful for parsing and calling commonly used alignment tools. See the [demos](https://github.com/bbaloglu/ashure/demo) folder for how some of these functions are used.
 
 ## Citing ASHURE
 
