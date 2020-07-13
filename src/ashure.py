@@ -897,7 +897,7 @@ def main():
 
     # config for clustering
     clst_parser = subparser.add_parser('clst', help='suboptions for clustering')
-    clst_parser.add_argument('-i', dest='cin_file', type=str, help='input csv file of sequences to cluster')
+    clst_parser.add_argument('-i', dest='cin_file', type=str, help='input csv, fasta, or fastq file of sequences to cluster')
     clst_parser.add_argument('-o', dest='cout_file', type=str, help='output csv file for cluster center sequences')
     config['clst_init']=''
     clst_parser.add_argument('-init', dest='clst_init', type=str, help='csv, fasta, or fastq file containing initial cluster centers.')
@@ -1100,6 +1100,7 @@ def main():
         logging.info('Loading cin_file: '+config['cin_file'])
         df = bpy.load_file(config['cin_file'])
         df = df.rename(columns={'consensus':'sequence'})
+        df['id'] = ['read'+str(i) for i in range(0,len(df))]
         # only work on sequences which have both forward and reverse primers
         if 'fwd_primer_seq' in df.columns and 'rev_primer_seq' in df.columns:
             df = df[df['fwd_primer_seq'].notna() & df['rev_primer_seq'].notna()]

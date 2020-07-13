@@ -309,10 +309,10 @@ def load_file(fname):
         logging.info('Loading '+fname)
         if '.csv' in fname:
             ref = pd.read_csv(fname)
-        elif '.fa' in fname or '.fasta' in fname:
-            ref = read_fasta(fname)
         elif '.fq' in fname or '.fastq' in fname:
             ref = read_fastq(fname)
+        elif '.fa' in fname or '.fasta' in fname:
+            ref = read_fasta(fname)
         return ref
     else:
         logging.info('Failed to load '+fname)
