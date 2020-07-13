@@ -65,8 +65,9 @@ def generate_pseudo_refdb(primers, reads, block=10000, fs='500-1000', workspace=
         N_chunks = np.ceil(len(reads[s])/block)
         for i, df_i in enumerate(np.array_split(reads[s], N_chunks)):
             logging.info('Working on '+str(i)+'/'+str(N_chunks)+' block size='+str(block)+' read size='+str(s1)+' to '+str(s2)+' bp')
-            data.append(match_primer_to_read(primers, df_i, workspace=workspace, config=config))
-
+            out = match_primer_to_read(primers, df_i, workspace=workspace, config=config)            
+            if len(out) > 0:
+                data.append(out)
     if len(data)==0:
         logging.error('generate_pseudo_refdb: no primers found in reads.')
         sys.exit(1)
@@ -1068,7 +1069,10 @@ def main():
         logging.info('Matching primers to reads')
         df = df.rename(columns={'consensus':'sequence'})
         df = match_primer_to_read(primers, df[['id','sequence']], config=config['fpmr_config'])
-       
+        if len(df) == 0:
+            logging.error('Fwd and Rev primers were not found in reads')
+            sys.exit(1)
+
         # Write the data to file
         logging.info('Writing primer_match to '+config['pmatch_file'])
         df.to_csv(config['pmatch_file'], index=False, compression='infer')
@@ -1094,7 +1098,8 @@ def main():
     if config['run_clst']:
         # load data
         logging.info('Loading cin_file: '+config['cin_file'])
-        df = pd.read_csv(config['cin_file']).rename(columns={'consensus':'sequence'})
+        df = bpy.load_file(config['cin_file'])
+        df = df.rename(columns={'consensus':'sequence'})
         # only work on sequences which have both forward and reverse primers
         if 'fwd_primer_seq' in df.columns and 'rev_primer_seq' in df.columns:
             df = df[df['fwd_primer_seq'].notna() & df['rev_primer_seq'].notna()]
