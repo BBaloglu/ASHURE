@@ -12,7 +12,7 @@
 ```
 
 # ASHURE
-A Sure Heuristic under Random events - A Python based toolkit for analysis of bulk environmental DNA from nanopore sequencing.
+A Safe Heuristic under Random events - A Python based toolkit for analysis of bulk environmental DNA from nanopore sequencing.
 
 ASHURE is designed for analysis of linear consensus or 1d2 like fastq data from nanopore sequencing devices. Library preparation procedures such as rolling circle amplification (RCA) generate ssDNA containing repeats of their originating template. When these concatemers are read by a nanopore sequencing device, the repetative regions can be realigned to generate a more error free consensus.
 
