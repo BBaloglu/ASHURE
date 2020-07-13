@@ -942,6 +942,8 @@ def main():
         if type(args.run)==type(None):
             if args.db_file==None:
                 config['run_prfg']=True
+            else:
+                config['run_prfg']=False
             keys = ['fgs','msa','cons','fpmr','trmc','clst']
             for k in keys:
                 config['run_'+k]=True
