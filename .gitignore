@@ -23,6 +23,6 @@ docs/
 */msa/
 *.phred
 *.csv.gz
-*.csv
+#*.csv
 .ipynb_checkpoints
 *.pdf
