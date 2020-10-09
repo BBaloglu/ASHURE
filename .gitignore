@@ -3,6 +3,7 @@
 */dev/
 runs/
 ref/
+bin/
 figures/
 basecalled_fastq/
 basecalled*/
