@@ -45,6 +45,9 @@ def generate_pseudo_refdb(primers, reads, block=10000, fs='500-1000', workspace=
         df = pandas dataframe with columns:
              [id, orientation, start, end, sequence, quality]
         '''
+        df['start'] = df['start'].astype(int)
+        df['end'] = df['end'].astype(int)
+ 
         data = []
         for r_id, ot, t1, t2, seq, qual in df.values:
             seq = seq[t1:t2]
@@ -84,7 +87,6 @@ def generate_pseudo_refdb(primers, reads, block=10000, fs='500-1000', workspace=
         else:
             x.append([i[0], i[1], i[4], i[3]])
     data = pd.DataFrame(x, columns=['id','orientation','start','end'])
-
     # merge and get pseudo reference sequences
     reads = bpy.add_seq(reads[reads['id'].isin(data['id'])]) # low mem optimization
     data = data.merge(reads[['id','sequence','quality']], on = 'id', how = 'left')
@@ -278,15 +280,10 @@ def get_spoa_consensus(MSA_outfile):
     data = []
     for i in range(0,len(MSA_outfile)):
         fname = MSA_outfile[i]
-        f = open(fname,'r')
-        text = f.read().split('\n')
-        f.close()
+        seq = bpy.read_spoa(fname)
         rcaID = fname.split('/')[-1].split('_Nfrags')[0]
         nfrags = int(fname.split('/')[-1].split('_Nfrags')[1].split('.')[0])
-        if len(text) < 2:
-            logging.info('file read error on '+fname)
-        else:
-            data.append([rcaID, fname.split('.out')[0], nfrags, text[1]])
+        data.append([rcaID, fname.split('.out')[0], nfrags, seq])
         if i%20000 == 0:
             logging.info('Consensus progress = '+str(i)+'/'+str(len(MSA_outfile)))
     return pd.DataFrame(data, columns=['id','msa_input_file','N frags','consensus'])
@@ -690,7 +687,7 @@ def cluster_subsample(df_align, dlist, N=100, mode='sorted', metric='AS'):
         x+= [q for q in qlist]
     return np.unique(x)
 
-def cluster_compute(df_q, csize=20, metric='similarity', outliers=False, pw_config ='-k15 -w10 -D', msa_config='-l 0 -r 2', workspace='./clust_run/'):
+def cluster_compute(df_q, csize=20, metric='similarity', outliers=False, pw_config ='-k15 -w10 -D', msa_config='-l 0 -r 0', workspace='./clust_run/'):
     '''
     Find cluster centers for a set of sequence data
     qry = dataframe of query sequences to search for cluster centers.
@@ -870,7 +867,7 @@ def main():
 
     # config for multi-sequence alignment
     msa_parser = subparser.add_parser('msa', help='suboptions for multi-sequence alignment')
-    config['msa_config']='-n -15 -g -10 -l 0 -r 2'
+    config['msa_config']='-n -15 -g -10 -l 0 -r 0'
     msa_parser.add_argument('-c', dest='msa_config', type=str, help='config options passed to spoa multi-sequence aligner')
     msa_parser.add_argument('-fq', dest='fastq', nargs='+', type=str, help='fastq files')
     msa_parser.add_argument('-i', dest='frag_folder', type=str, help='folder where frags csv files are stored')

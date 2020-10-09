@@ -908,21 +908,15 @@ def run_msa(MSA_infiles, aligner='spoa', config='-l 0 -r 2', thread_lock=True):
 def read_spoa(fname):
     '''
     Parses output from spoa multi-sequence aligner
+    updated to read fasta output from spoa
+    returns consensus sequence
     '''
-    f = open(fname,'r')
-    text = f.read().split('\n')[:-1]
-    f.close()
-
-    consensus = ''
-    msa = []
-    if text[0].split(' ')[0] == 'Consensus':
-        consensus = text[1]
-        
-    if text[2] == 'Multiple sequence alignment':
-        msa = text[3:]
-    elif text[0] == 'Multiple sequence alignment':
-        msa = text[1:]
-    return [consensus, msa]
+    seq = read_fasta(fname, low_mem=False)
+    seq = seq.iloc[-1]['sequence'] # last entry of output from spoa is the consensus sequence
+    seq = seq.replace('-','')
+    if len(seq) < 1:
+        logging.warning('read_spoa: warning no consensus sequence in '+fname)
+    return seq
     
 def batch_file_remove(files):
     '''
@@ -1487,7 +1481,7 @@ def cluster_Kmeans(df, n_clusters, n_init=10, n_iter=100, ordered=False):
     df['ordering'] = df['ordering'].astype(int)
     return df
 
-def cluster_spoa_merge(df, config='-l 0 -r 2', workspace='./clust_spoa_merge/', batch_size=100, cleanup=True):
+def cluster_spoa_merge(df, config='-l 0 -r 0', workspace='./clust_spoa_merge/', batch_size=100, cleanup=True):
     '''
     Function to return list of cluster centers via multi-sequence alignment
     df = dataframe of query sequences to search for cluster centers.
@@ -1504,14 +1498,13 @@ def cluster_spoa_merge(df, config='-l 0 -r 2', workspace='./clust_spoa_merge/', 
     '''
     # make directory if it does not exist
     workspace = check_dir(workspace)
+    # cleanup existing files
     files = glob.glob(workspace+'*')
     batch_file_remove(files)
-    
     # sort the dataframe and prepare to iterate through it
     df = df.sort_values(by = ['cluster_id', 'id'])
-    # check if sequences are consensus and if original msa files are present
     MSA_infile = []
-    # deal with merging consensus from multi-seq alignment
+    # deal with merging error corrected reads from multi-seq alignment
     if 'msa_input_file' in df.columns:
         df = df[['id','cluster_id','msa_input_file']]
         df_fa = []
@@ -1523,7 +1516,6 @@ def cluster_spoa_merge(df, config='-l 0 -r 2', workspace='./clust_spoa_merge/', 
                 df_fa.append(read_fasta(fname))
             elif 'fq' in ftype or 'fastq' in ftype:
                 df_fq.append(read_fastq(fname))
-
             # write file if boundary of new cluster found
             if i+1 >= len(df) or c_id!= df.values[i+1, 1]:
                 c1 = len(df_fa) > 0
@@ -1580,14 +1572,14 @@ def cluster_spoa_merge(df, config='-l 0 -r 2', workspace='./clust_spoa_merge/', 
         run_msa(infile, 'spoa', config)
         logging.info('cluster_spoa_merge: spoa on '+str(i)+'/'+str(N_chunks))
     
-    # get consensus
+    # get consensus output from spoa
     logging.info('cluster_spoa_merge: reading consensus')
     MSA_outfile = [i+'.out' for i in MSA_infile]
     data = []
     for i in range(0,len(MSA_outfile)):
         out = read_spoa(MSA_outfile[i])
         c_id = 'cluster' + MSA_outfile[i].split('/')[-1].split('.')[0]
-        data.append([c_id, out[0]])
+        data.append([c_id, out])
 
     # remove work folder after completion
     if cleanup:
