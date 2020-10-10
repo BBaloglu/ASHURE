@@ -887,7 +887,8 @@ def main():
     fpmr_parser.add_argument('-p', dest='primer_file', type=str,
             help='''csv file containing forward and reverse primers used.
     This must have at least columns [fwd_id, fwd_seq, rev_id, rev_seq]''')
-    fpmr_parser.add_argument('-o', dest='pmatch_file', help='csv file containing primer match information')
+    fpmr_parser.add_argument('-o1', dest='pmatch_file', help='csv file containing primer match information')
+    fpmr_parser.add_argument('-o2', dest='cin_file', help='csv file containing trimmed consensus reads')
     fpmr_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
     fpmr_parser.add_argument('-r1', dest='run_fpmr', action='store_true', help='run primer matching')
     fpmr_parser.add_argument('-r2', dest='run_trmc', action='store_true', help='trim primers from reads')
