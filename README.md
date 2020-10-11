@@ -1,3 +1,20 @@
+# ASHURE: A Python based bioinformatics toolkit for analysis of bulk environmental DNA from nanopore sequencing
+
+-------------
+<p align="center">
+  <img src='readme_imgs/ASHURE_diagram.png' width='500' height='700'>
+</p>
+
+-------------
+
+ASHURE is designed for analysis of linear consensus or 1d2 like fastq data from nanopore sequencing devices. Library preparation procedures such as rolling circle amplification (RCA) generate ssDNA containing repeats of their originating template. When these concatemers are read by a nanopore sequencing device, the repetative regions can be realigned to generate a more error free consensus.
+
+ASHURE works by leveraging priori information about the amplicon such as primers used, reference database of related sequences, and amplicon size to find, align, and generate a polished consensus read. Reference sequences do not have to match the amplicon, it is enough for them to be just similar enough (70-80 percent identity) for fuzzy kmer based alignment.
+
+The sensitivity and speed of the pipeline is dependent on the quality of the reference or pseudo reference used. Searching large libraries will take time and compute effort is sometimes wasted on comparing against unrelated or redundant sequences. Bad reference sequences will result in poor alignments that contaminate multi-alignment. The best results are obtained by searching against a compact but accurate database of reference sequences relevant to your raw fastq data. The tools and steps for generating good pseudo reference sequences are shown in [pseudo_reference.ipynb](https://bbaloglu.github.io/pages/ashure/pseudo_reference.html).
+
+Sequence clusters are generated in the last step of the pipeline using a density based clustering approach called OPTICS. Traditional OTU thresholding approaches do not work with nanopore data because the error profile of each read is unpredictable. Density based clustering is more suited for these situations because OTU boundaries are adaptively called based on the divergence in local sequence identity. This method requires sufficient coverage around a true amplicon for clustering to work. An interative demo of how this approach works can be found in [clustering.ipynb](https://bbaloglu.github.io/pages/ashure/clustering.html).
+
 # Getting started
 ```bash
 ./ashure.py -h                                                 # prints help
@@ -10,17 +27,6 @@
 ./ashure.py run -fq folder/*.fq -db cl.csv -o consensus.csv -r          # runs everything with cl.csv as reference
 ./ashure.py run -fq folder/*.fq -db cl.csv -o cons.csv -r fgs,msa,cons  # runs fgs, msa, and cons modules only 
 ```
-
-# ASHURE
-A Safe Heuristic under Random events - A Python based toolkit for analysis of bulk environmental DNA from nanopore sequencing.
-
-ASHURE is designed for analysis of linear consensus or 1d2 like fastq data from nanopore sequencing devices. Library preparation procedures such as rolling circle amplification (RCA) generate ssDNA containing repeats of their originating template. When these concatemers are read by a nanopore sequencing device, the repetative regions can be realigned to generate a more error free consensus.
-
-ASHURE works by leveraging priori information about the amplicon such as primers used, reference database of related sequences, and amplicon size to find, align, and generate a polished consensus read. Reference sequences do not have to match the amplicon, it is enough for them to be just similar enough (70-80 percent identity) for fuzzy kmer based alignment.
-
-The sensitivity and speed of the pipeline is dependent on the quality of the reference or pseudo reference used. Searching large libraries will take time and compute effort is sometimes wasted on comparing against unrelated or redundant sequences. Bad reference sequences will result in poor alignments that contaminate multi-alignment. The best results are obtained by searching against a compact but accurate database of reference sequences relevant to your raw fastq data. The tools and steps for generating good pseudo reference sequences are shown in [pseudo_reference.ipynb](https://bbaloglu.github.io/pages/ashure/pseudo_reference.html).
-
-Sequence clusters are generated in the last step of the pipeline using a density based clustering approach called OPTICS. Traditional OTU thresholding approaches do not work with nanopore data because the error profile of each read is unpredictable. Density based clustering is more suited for these situations because OTU boundaries are adaptively called based on the divergence in local sequence identity. This method requires sufficient coverage around a true amplicon for clustering to work. An interative demo of how this approach works can be found in [clustering.ipynb](https://bbaloglu.github.io/pages/ashure/clustering.html).
 
 ## Dependencies
 ### Runtime dependencies
@@ -42,7 +48,7 @@ export PATH=$PATH':/home/username/.local/bin'               # makes executables 
 echo PATH=$PATH':/home/username/.local/bin' >> .bash_login  # updates these settings everytime you login
 ```
 
-### Optional dependences
+### Optional dependencies
 Wrappers for the following aligners can also be called from `bilge_pype.py` These tools are not used by `ashure.py`, but if you want to use them in your python scripts you must also make their binaries callable from your local path 
 
 [mafft](https://mafft.cbrc.jp/alignment/software/source.html) for progressive multi-sequence alignment
