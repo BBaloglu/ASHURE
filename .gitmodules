@@ -1,3 +1,9 @@
 [submodule "external/data"]
 	path = external/data
 	url = https://github.com/zchen15/demo_data
+[submodule "external/minimap2"]
+	path = external/minimap2
+	url = https://github.com/lh3/minimap2
+[submodule "external/spoa"]
+	path = external/spoa
+	url = https://github.com/rvaser/spoa

@@ -4,6 +4,7 @@
 runs/
 ref/
 bin/
+external/
 figures/
 basecalled_fastq/
 basecalled*/
