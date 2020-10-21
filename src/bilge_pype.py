@@ -1,305 +1,406 @@
 #!/usr/bin/env python
 # Helper tools for sequence data
-# bilgenurb@gmail.com
+# bbaloglu@uoguelph.ca
 
 # Loading the libraries
 import numpy as np
 import pandas as pd
-
 # signal processing libraries
 import scipy as sp
 import scipy.signal
-
 # clustering libraries
 import sklearn
 import sklearn.cluster
 import sklearn.decomposition
 import hdbscan
-
 # For interfacing with the file system
 import subprocess
 import os
+import distutils.spawn
+# file handling
+import bz2
+import gzip
+import glob
+# others
 import time
 import datetime
-import glob
 import sys
 import logging
 
+def init_vars():
+	'''
+	Initializes some global variables associated with this pipeline
+	'''
+	global _minimap2, _bwa, _bowtie2, _spoa, _mafft
+	_minimap2 = 'minimap2'
+	_bwa = 'bwa'
+	_bowtie2 = 'bowtie2'
+	_spoa = 'spoa'
+	_mafft = 'mafft'
+
+def check_toolchain():
+	'''
+	Check if the aligner tools exist
+	'''
+	toolchain = [_minimap2, _bwa, _bowtie2, _spoa, _mafft]
+	# check if the tool exists
+	for i in toolchain:
+		if i != distutils.spawn.find_executable(i):
+			logging.warning('check_toolchain: '+i+' not found')
+		else:
+			logging.info('check_toolchain: '+i+' found')
+
+# initialize paths to aligner tools and check if they exist
+init_vars()
+check_toolchain()
+
 def init_log(fname=None, level='DEBUG'):
-    fmt = 'pid['+str(os.getpid())+'] %(asctime)s.%(msecs)03d %(levelname)s: %(message)s'
-    dfmt = '%Y-%m-%d %H:%M:%S'
-    formatter = logging.Formatter(fmt, datefmt=dfmt)
-    # print log to a file
-    N=1
-    if type(fname)==str:
-        file_handler = logging.FileHandler(filename=fname)
-        file_handler.setLevel(level)
-        file_handler.setFormatter(formatter)
-        N=2 # adds file_handler only once
-        if len(logging.getLogger().handlers) < N:
-            logging.getLogger().addHandler(file_handler)
-    # print to stdout
-    stdout_handler = logging.StreamHandler(sys.stdout)
-    stdout_handler.setLevel(level)
-    stdout_handler.setFormatter(formatter)
-    # add stream handler only once
-    if len(logging.getLogger().handlers) < N:
-        logging.getLogger().addHandler(stdout_handler)
-    logging.getLogger().setLevel(level)
+	'''
+	Function to initialize the logging tool
+	fname = filename to save the log
+	level = logging to save to file
+	'''
+	fmt = 'pid['+str(os.getpid())+'] %(asctime)s.%(msecs)03d %(levelname)s: %(message)s'
+	dfmt = '%Y-%m-%d %H:%M:%S'
+	formatter = logging.Formatter(fmt, datefmt=dfmt)
+	# print log to a file
+	N=1
+	if type(fname)==str:
+		file_handler = logging.FileHandler(filename=fname)
+		file_handler.setLevel(level)
+		file_handler.setFormatter(formatter)
+		N=2 # adds file_handler only once
+		if len(logging.getLogger().handlers) < N:
+			logging.getLogger().addHandler(file_handler)
+	# print to stdout
+	stdout_handler = logging.StreamHandler(sys.stdout)
+	stdout_handler.setLevel(level)
+	stdout_handler.setFormatter(formatter)
+	# add stream handler only once
+	if len(logging.getLogger().handlers) < N:
+		logging.getLogger().addHandler(stdout_handler)
+	logging.getLogger().setLevel(level)
 
 def parse_ONT_header(text):
-    text = text.split(' ')
-    key = {'read':1,'ch':2,'start_time':3}
-    out = [None]*(len(key)+1)
-    out[0] = text[0]
-    for line in text[1:]:
-        line = line.split('=')
-        if line[0] in key:
-            out[key[line[0]]] = line[1] 
-    return out
+	'''
+	Parses the ONT header for information about the read, channel, and read id
+	'''
+	text = text.split(' ')
+	key = {'read':1,'ch':2,'start_time':3}
+	out = ['',-1,-1,-1]
+	out[0] = text[0]
+	for line in text[1:]:
+		line = line.split('=')
+		if line[0] in key and len(line)==2:
+			out[key[line[0]]] = line[1]
+	return out
 
 def add_ONT_header(df):
-    df = df.copy()
-    data = []
-    for h in df['id'].values:
-        data.append(parse_ONT_header(h))
-    data = pd.DataFrame(data, columns=['id','read','ch','start_time'])
-    for c in data.columns:
-        df[c] = data[c].values
-    col = ['read','ch']
-    for c in col:
-        df[c] = df[c].astype(int)
-    return df
+	'''
+	Parses the fastq header for ONT specific information and adds it to the dataframe
+	'''
+	df = df.copy()
+	data = []
+	for h in df['id'].values:
+		data.append(parse_ONT_header(h))
+	data = pd.DataFrame(data, columns=['id','read','ch','start_time'])
+	for c in data.columns:
+		df[c] = data[c].values
+	col = ['read','ch']
+	for c in col:
+		df[c] = df[c].astype(int)
+	return df
 
-# Function to load fastq data and primer info
 def load_ONT_fastq(files, low_mem=False, header=False):
-    '''
-    Function to load fastq info from list of ONT fastq files
-    files = list of fastq files
-    low_mem = store seek indices instead of strings to save on memory
-    header = keep original header from fastq files
-    output = pandas dataframe of ONT fastq info
-    '''
-    # Generate table of sequences via iteration
-    start = time.time()
-    df = []
-    for i in range(0,len(files)):
-        df.append(read_fastq(files[i], low_mem=low_mem)) # Save tables as a vector
-        if i%20==0: # print out progress
-            logging.info('Processing '+str(i)+'/'+str(len(files))+', current file = '+files[i])
-            logging.info('elapse = {0:.2f}'.format(time.time()-start)+'s')
-    df = pd.concat(df) # Merge all the tables
-    logging.info('adding ONT header info')
-    if header:
-        df['header'] = df['id'].values
-    df = add_ONT_header(df)
-    # add sequence length info
-    if 'rlen' in df.columns:
-        df['length'] = df['rlen']
-    elif 'sequence' in df.columns:
-        df['length'] = [len(i) for i in df['sequence']]
-    # format datetime
-    df['start_time'] = pd.to_datetime(df['start_time'])
-    return df
+	'''
+	Function to load fastq info from list of ONT fastq files
+	files = list of fastq files
+	low_mem = store seek indices instead of strings to save on memory
+	header = keep original header from fastq files
+	output = pandas dataframe of ONT fastq info
+	'''
+	# Generate table of sequences via iteration
+	start = time.time()
+	df = []
+	for i in range(0,len(files)):
+		df.append(read_fastq(files[i], low_mem=low_mem)) # Save tables as a vector
+		if i%20==0: # print out progress
+			logging.info('Processing '+str(i)+'/'+str(len(files))+', current file = '+files[i])
+			logging.info('elapse = {0:.2f}'.format(time.time()-start)+'s')
+	df = pd.concat(df) # Merge all the tables
+	if header:
+	   df['header'] = df['id'].values
+
+	# parse ONT header information
+	logging.info('adding ONT header info')
+	df = add_ONT_header(df)
+	# format datetime
+	if 'start_time' in df.columns:
+		df['start_time'] = pd.to_datetime(df['start_time'])
+	# add sequence length info
+	if 'rlen' in df.columns:
+		df['length'] = df['rlen']
+	elif 'sequence' in df.columns:
+		df['length'] = [len(i) for i in df['sequence']]
+	return df
 
 def load_primers(primer_file):
-    '''
-    Reads primer information from a csv file and checks it has the expected structure
-    primer csv must have the following columns:
-    [fwd_id,fwd_sequence,rev_id,rev_sequence]
+	'''
+	Reads primer information from a csv file and checks it has the expected structure
+	primer csv must have the following columns:
+	[fwd_id,fwd_sequence,rev_id,rev_sequence]
 
-    fwd_id  = name of forward primer
-    fwd_seq = sequence of forward primer
-    rev_id = name of reverse primer
-    rev_seq = sequence of reverse primer
+	fwd_id  = name of forward primer
+	fwd_seq = sequence of forward primer
+	rev_id = name of reverse primer
+	rev_seq = sequence of reverse primer
 
-    output = pandas dataframe of primer information
-    '''
-    logging.info('Reading primers from '+primer_file)
-    df = pd.read_csv(primer_file, delimiter = ',')
-    # safety checks on the primer data
-    L1 = len(df)
-    df = df.dropna()
-    L2 = len(df)
-    if L1!=L2:
-        logging.warning('Warning: nan info was dropped from primer data')
-    
-    # check basic info is there
-    col = ['fwd_id','fwd_seq','rev_id','rev_seq']
-    for c in col:
-        if (c in df.columns) == False:
-            logging.error('column '+c+' not found in '+primer_file)
-            sys.exit(1)
-    return df
+	output = pandas dataframe of primer information
+	'''
+	logging.info('Reading primers from '+primer_file)
+	df = pd.read_csv(primer_file, delimiter = ',')
+	# safety checks on the primer data
+	L1 = len(df)
+	df = df.dropna()
+	L2 = len(df)
+	if L1!=L2:
+		logging.warning('Warning: nan info was dropped from primer data')
+
+	# check basic info is there
+	col = ['fwd_id','fwd_seq','rev_id','rev_seq']
+	for c in col:
+		if (c in df.columns) == False:
+			logging.error('column '+c+' not found in '+primer_file)
+			sys.exit(1)
+	return df
 
 def add_seq(df):
-    '''
-    Adds sequence and quality information back to dataframe
-    df = dataframe containing at least the columns:
-        [filename, id, seek1, rlen] for fasta files
-        [filename, id, seek1, seek2, rlen] for fastq files
-    return dataframe with columns [id, sequence, quality] or [id, sequence]
-    '''
-    # if data is already there, dont do anything
-    if 'sequence' in df.keys():
-        return df
-    # check if relevant columns are there
-    cols = ['filename','id','seek1','rlen']
-    for c in cols:
-        if (c in df.keys())==False:
-            logging.warning('columns '+c+' not found in dataframe')
-            return df
-    # sort and iterate
-    df = df.sort_values(by=['filename','seek1']).copy()
-    data = []
-    if 'seek2' in df.keys():
-        # work on fastq
-        x = df[['filename','id','seek1','seek2','rlen']].values
-        files = np.unique(x[:,0])
-        for fname in files:
-            y = x[x[:,0]==fname]
-            with open(fname,'r') as f:
-                for i in range(0,len(y)):
-                    f.seek(y[i,2])
-                    seq = f.read(y[i,4])
-                    f.seek(y[i,3])
-                    q = f.read(y[i,4])
-                    data.append([seq, q])
-        df['sequence'] = [i[0] for i in data]
-        df['quality'] = [i[1] for i in data]
-        cols = ['seek1','seek2','rlen','filename']
-        df = df.drop(columns=cols)
-    else:
-        # work on fasta
-        x = df[['filename','id','seek1','rlen']].values
-        files = np.unique(x[:,0])
-        for fname in files:
-            y = x[x[:,0]==fname]
-            with open(fname,'r') as f:
-                for i in range(0,len(y)):
-                    f.seek(y[i,2])
-                    seq = f.read(y[i,3])
-                    seq = seq.replace('\n','')
-                    data.append(seq)
-        df['sequence'] = data
-        cols = ['seek1','rlen','filename']
-        df = df.drop(columns=cols)
-    return df
+	'''
+	Adds sequence and quality information back to dataframe
+	df = dataframe containing at least the columns:
+		[filename, id, seek1, rlen] for fasta files
+		[filename, id, seek1, seek2, rlen] for fastq files
+	return dataframe with columns [id, sequence, quality] or [id, sequence]
+	'''
+	# if data is already there, dont do anything
+	if 'sequence' in df.keys():
+		return df
+	# check if relevant columns are there
+	cols = ['filename','id','seek1','rlen']
+	for c in cols:
+		if (c in df.keys())==False:
+			logging.warning('columns '+c+' not found in dataframe')
+			return df
+	# sort and iterate
+	df = df.sort_values(by=['filename','seek1']).copy()
+	data = []
+	if 'seek2' in df.keys():
+		# work on fastq
+		x = df[['filename','id','seek1','seek2','rlen']].values
+		files = np.unique(x[:,0])
+		for fname in files:
+			y = x[x[:,0]==fname]
+			# decompress file if needed
+			fbuffer = file_decompress(fname)
+			with open(fbuffer, 'r') as f:
+				for i in range(0,len(y)):
+					f.seek(y[i,2])
+					seq = f.read(y[i,4])
+					f.seek(y[i,3])
+					q = f.read(y[i,4])
+					data.append([seq, q])
+			# remove decompressed file
+			if fname!=fbuffer:
+				subprocess.run(['rm', fbuffer])
+		df['sequence'] = [i[0] for i in data]
+		df['quality'] = [i[1] for i in data]
+		cols = ['seek1','seek2','rlen','filename']
+		df = df.drop(columns=cols)
+	else:
+		# work on fasta
+		x = df[['filename','id','seek1','rlen']].values
+		files = np.unique(x[:,0])
+		for fname in files:
+			y = x[x[:,0]==fname]
+			# decompress the file
+			fbuffer = file_decompress(fname)
+			with open(fbuffer, 'r') as f:
+				for i in range(0,len(y)):
+					f.seek(y[i,2])
+					seq = f.read(y[i,3])
+					seq = seq.replace('\n','')
+					data.append(seq)
+			# remove decompressed file
+			if fname!=fbuffer:
+				subprocess.run(['rm', fbuffer])
+		df['sequence'] = data
+		cols = ['seek1','rlen','filename']
+		df = df.drop(columns=cols)
+	return df
+
+def file_decompress(fname):
+	'''
+	Checks if file is bz2 or gzip compressed.
+	If file is compressed, decompress the file and return the filename of decompressed file
+	fname = name of compressed file
+	returns the original file or new 
+	'''
+	ftype = fname.split('.')
+	if ftype[-1]=='bz2':
+		f1 = bz2.open(fname, mode='rt')
+		fbuffer = fname[:-4]
+		with open(fbuffer, 'w') as f2:
+			f2.write(f1.read())
+		return fbuffer
+	elif ftype[-1]=='gz':
+		f1 = gzip.open(fname, mode='rt')
+		fbuffer = fname[:-3]
+		with open(fbuffer, 'w') as f2:
+			f2.write(f1.read())
+		return fbuffer
+	else:
+		return fname
+
+def write_to_compressed(fname):
+	'''
+	Checks if a filename is bz2 or gz compressed.
+	If compression is requested, then open a compressed file for writing.
+	fname = filename with .bz2 or .gz or no extension
+	return a file handle
+	'''
+	ftype = fname.split('.')
+	if ftype[-1]=='bz2':
+		return bz2.open(fname, mode='wt')
+	elif ftype[-1]=='gz':
+		return gzip.open(fname, mode='wt')
+	else:
+		return open(fname,'w')
 
 def read_fastq(fname, low_mem=False):
-    '''
-    Reads list of sequences from a fastq file format.
-    
-    fname = fname to read the information
-    low_mem = saves memory by not storing sequence and quality strings.
-            Instead this function returns columns [filename, id, seek1, seek2, rlen]
-            Use add_seq function to add back sequence and quality to the dataframe
-    returns list of names, sequence, quality
-    '''
-    data = []
-    with open(fname,'r') as f:
-        fsize = os.path.getsize(fname)
-        while fsize > f.tell():
-            rid = f.readline()[:-1]
-            s1 = f.tell()
-            seq = f.readline()[:-1]
-            f.seek(f.tell()+2)
-            q = f.readline()[:-1]
-            L = len(seq)
-            if low_mem:
-                data.append([rid[1:], s1, L])
-            else:
-                data.append([seq, q, rid[1:]])
-    col = ['sequence','quality','id','seek1','rlen']
-    if low_mem:
-        data = pd.DataFrame(data, columns=col[2:])
-        data['seek2'] = data['seek1']+data['rlen']+3
-        data['filename'] = fname
-    else:
-        data = pd.DataFrame(data, columns=col[:3])
-    return data
+	'''
+	Reads list of sequences from a fastq file format.
+
+	fname = fname to read the information
+	low_mem = saves memory by not storing sequence and quality strings.
+			Instead this function returns columns [filename, id, seek1, seek2, rlen]
+			Use add_seq function to add back sequence and quality to the dataframe
+	returns list of names, sequence, quality
+	'''
+	data = []
+	# decompress the file
+	fbuffer = file_decompress(fname)
+	with open(fbuffer, 'r') as f:
+		fsize = os.path.getsize(fbuffer)
+		while fsize > f.tell():
+			rid = f.readline()[:-1]
+			s1 = f.tell()
+			seq = f.readline()[:-1]
+			f.readline()
+			s2 = f.tell()
+			q = f.readline()[:-1]
+			L = len(seq)
+			if low_mem:
+				data.append([rid[1:], s1, s2, L])
+			else:
+				data.append([seq, q, rid[1:]])
+	# remove the decompressed file to save on space
+	if fname!=fbuffer:
+		subprocess.run(['rm', fbuffer])
+	# format the dataframe
+	col = ['sequence','quality','id','seek1', 'seek2', 'rlen']
+	if low_mem:
+		data = pd.DataFrame(data, columns=col[2:])
+		data['filename'] = fname
+	else:
+		data = pd.DataFrame(data, columns=col[:3])
+	return data
 
 def write_fastq(fname, data):
-    '''
-    Write list of sequences into a fastq file format.
-    
-    data =  array with [id, sequence, quality] as the columns
-    fname = file to write the information
-    '''
-    with open(fname,'w') as f:
-        if len(data.shape) > 1: # case for table
-            for i in data:
-                text = '@' + str(i[0]) + '\n'
-                text+= str(i[1]) + '\n'
-                text+= '+\n'
-                text+= str(i[2]) + '\n'
-                f.write(text)
-        else: # case for single row
-            text = '@' + data[0] + '\n'
-            text+= str(data[1]) + '\n'
-            text+= '+\n'
-            text+= str(data[2]) + '\n'
-            f.write(text)
+	'''
+	Write list of sequences into a fastq file format.
+	data = dataframe or numpy array with columns [id, sequence, quality]
+	fname = file to write the information.
+			File extension can be .bz2 or .gz if compression is desired
+	'''
+	# add some error handling in case dataframe is wrong
+	if type(data) == np.ndarray and data.shape[1]!=3:
+		logging.error('write_fastq: data for '+fname+' column count is wrong')
+		sys.exit(1)
+	elif type(data) == pd.core.frame.DataFrame:
+		data = data[['id','sequence','quality']].values
+	with write_to_compressed(fname) as f:
+		for i in data:
+			text = '@' + str(i[0]) + '\n'
+			text+= str(i[1]) + '\n'
+			text+= '+\n'
+			text+= str(i[2]) + '\n'
+			f.write(text)
 
 def read_fasta(fname, low_mem=False):
-    '''
-    Reads list of sequences from a fasta file format.
-    
-    fname = file to read the information
-    returns list of sequence and names
-    '''
-    data = []
-    with open(fname,'r') as f:
-        seq = ''
-        fsize = os.path.getsize(fname)
-        while fsize > f.tell():
-            line = f.readline()
-            if line[0]=='>':
-                # record it once new line is hit
-                if seq!='':
-                    L = len(seq)
-                    seq = seq.replace('\n','')
-                    if low_mem:
-                        data.append([rid, s1, L])
-                    else:
-                        data.append([seq, rid])
-                # start the new entry 
-                rid = line[1:-1]
-                s1 = f.tell()
-                seq = ''
-            else:
-                seq+= line
-    # end of file reached, run last loop
-    L = len(seq)
-    seq = seq.replace('\n','')
-    # export the data
-    col = ['sequence','id','seek1','rlen']
-    if low_mem:
-        data.append([rid, s1, L])
-        data = pd.DataFrame(data, columns=col[1:])
-        data['filename'] = fname
-    else:
-        data.append([seq, rid])
-        data = pd.DataFrame(data, columns=col[:2])
-    return data
+	'''
+	Reads list of sequences from a fasta file format.
+
+	fname = file to read the information
+	returns list of sequence and names
+	'''
+	data = []
+	fbuffer = file_decompress(fname)
+	with open(fbuffer, 'r') as f:
+		seq = ''
+		rid = ''
+		# get size of file
+		fsize = os.path.getsize(fbuffer)
+		while fsize > f.tell():
+			line = f.readline()
+			if line[0]=='>':
+				# record it once new line is hit
+				if seq!='' and rid!='':
+					L = len(seq)
+					if low_mem:
+						data.append([rid, s1, L])
+					else:
+						seq = seq.replace('\n','')
+						data.append([seq, rid])
+				# start the new entry 
+				rid = line[1:-1]
+				s1 = f.tell()
+				seq = ''
+			else:
+				seq+= line
+	# end of file reached, run last loop
+	L = len(seq)
+	seq = seq.replace('\n','')
+	# remove decompressed file
+	if fname!=fbuffer:
+		subprocess.run(['rm', fbuffer])
+	# export the data
+	col = ['sequence','id','seek1','rlen']
+	if low_mem:
+		data.append([rid, s1, L])
+		data = pd.DataFrame(data, columns=col[1:])
+		data['filename'] = fname
+	else:
+		data.append([seq, rid])
+		data = pd.DataFrame(data, columns=col[:2])
+	return data
 
 def write_fasta(fname, data):
-    '''
-    Write list of sequences into a fasta file format.
-    
-    data =  array with [id, sequence] as the columns
-    fname = file to write the information
-    '''
-    with open(fname,'w') as f:
-        if len(data.shape) > 1: # case for table
-            for i in data:
-                text = '>' + str(i[0]) + '\n'
-                text+= str(i[1]) + '\n'
-                f.write(text)
-        else: # case for single row
-            text = '>' + str(data[0]) + '\n'
-            text+= str(data[1]) + '\n'
-            f.write(text)
+	'''
+	Write list of sequences into a fasta file format.
+	data =  dataframe or numpy array with columns [id, sequence]
+	fname = file to write the information
+			.bz2 and .gz extension can be added to filename if compression is desired
+	'''
+	if type(data) == np.ndarray and data.shape[1]!=2:
+		logging.error('write_fasta: data for '+fname+' column count is wrong')
+		sys.exit(1)
+	elif type(data) == pd.core.frame.DataFrame:
+		data = data[['id','sequence']].values
+	with write_to_compressed(fname) as f:
+		for i in data:
+			text = '>' + str(i[0]) + '\n'
+			text+= str(i[1]) + '\n'
+			f.write(text)
 
 def load_file(fname):
     '''
@@ -408,11 +509,11 @@ def run_bowtie2(query, database, workspace='./bowtie2/', config='-a --very-sensi
     if build_index == True:
         value = check_seqdf(database)
         if value == 2:
-            write_fasta(dbfile, database[['id','sequence','quality']].values)
-            cmd = 'bowtie2-build --quiet -q '+dbfile+' '+btfile+' --threads 2'
+            write_fasta(dbfile, database[['id','sequence','quality']])
+            cmd = _bowtie2+'-build --quiet -q '+dbfile+' '+btfile+' --threads 2'
         elif value == 1:
-            write_fasta(dbfile, database[['id','sequence']].values)
-            cmd = 'bowtie2-build --quiet -f '+dbfile+' '+btfile+' --threads 2'
+            write_fasta(dbfile, database[['id','sequence']])
+            cmd = _bowtie2+'-build --quiet -f '+dbfile+' '+btfile+' --threads 2'
         else:
             return -1
         subprocess.run(cmd.split(' '))
@@ -422,17 +523,17 @@ def run_bowtie2(query, database, workspace='./bowtie2/', config='-a --very-sensi
     if value == 4:
         write_fastq(qfile, query[['fwd_id','fwd_seq','fwd_quality']].values)
         write_fastq(mfile, query[['rev_id','rev_seq','fwd_quality']].values)
-        cmd = 'bowtie2 '+config+' -x '+btfile+' -q -1 '+qfile+' -2 '+mfile+' -S '+outfile
+        cmd = _bowtie2+' '+config+' -x '+btfile+' -q -1 '+qfile+' -2 '+mfile+' -S '+outfile
     elif value == 3:
         write_fasta(qfile, query[['fwd_id','fwd_seq']].values)
         write_fasta(mfile, query[['rev_id','rev_seq']].values)
-        cmd = 'bowtie2 '+config+' -x '+btfile+' -f -1 '+qfile+' -2 '+mfile+' -S '+outfile
+        cmd = _bowtie2+' '+config+' -x '+btfile+' -f -1 '+qfile+' -2 '+mfile+' -S '+outfile
     elif value == 2: # write fastq
-        write_fastq(qfile, query[['id','sequence','quality']].values)
-        cmd = 'bowtie2 '+config+' -x '+btfile+' -q -U '+qfile+' -S '+outfile
+        write_fastq(qfile, query[['id','sequence','quality']])
+        cmd = _bowtie2+' '+config+' -x '+btfile+' -q -U '+qfile+' -S '+outfile
     elif value == 1: # write fasta
-        write_fasta(qfile, query[['id','sequence']].values)
-        cmd = 'bowtie2 '+config+' -x '+btfile+' -f -U '+qfile+' -S '+outfile
+        write_fasta(qfile, query[['id','sequence']])
+        cmd = _bowtie2+' '+config+' -x '+btfile+' -f -U '+qfile+' -S '+outfile
     else:
         return -1
 
@@ -502,7 +603,7 @@ def run_bwa(query, database, workspace='./bwa/', config=' mem -a ', build_index=
             write_fasta(dbfile, database[['id','sequence']].values)
         else:
             return -1
-        cmd = 'bwa index '+dbfile
+        cmd = _bwa+' index '+dbfile
         subprocess.run(cmd.split(' '))
 
     # Check if we are aligning paired reads
@@ -525,9 +626,9 @@ def run_bwa(query, database, workspace='./bwa/', config=' mem -a ', build_index=
         return -1
     
     if paired:
-        cmd = 'bwa '+config+' '+dbfile+' '+qfile+' '+mfile+' -o '+outfile
+        cmd = _bwa+' '+config+' '+dbfile+' '+qfile+' '+mfile+' -o '+outfile
     else:
-        cmd = 'bwa '+config+' '+dbfile+' '+qfile+' -o '+outfile
+        cmd = _bwa+' '+config+' '+dbfile+' '+qfile+' -o '+outfile
 
     # call the aligner
     subprocess.run(cmd.split(' '))
@@ -623,15 +724,15 @@ def run_minimap2(query, database, workspace='./minimap2/', config='-x map-ont', 
     # Write database to fasta or fastq
     value = check_seqdf(database)
     if value == 2:
-        write_fastq(dbfile, database[['id','sequence','quality']].values)
+        write_fastq(dbfile, database[['id','sequence','quality']])
     elif value == 1:
-        write_fasta(dbfile, database[['id','sequence']].values)
+        write_fasta(dbfile, database[['id','sequence']])
     else:
         return -1
 
     # Only build index when we need to. Index building takes a lot of time
     if build_index:
-        cmd = 'minimap2 '+config+' -d '+btfile+' '+dbfile
+        cmd = _minimap2+' '+config+' -d '+btfile+' '+dbfile
         subprocess.run(cmd.split(' '))
         
     # Write query to fasta or fastq
@@ -658,9 +759,9 @@ def run_minimap2(query, database, workspace='./minimap2/', config='-x map-ont', 
     if use_index:
         dbfile = btfile
     if paired:
-        cmd = 'minimap2 '+config+' '+dbfile+' '+qfile+' '+mfile+' -o '+outfile
+        cmd = _minimap2+' '+config+' '+dbfile+' '+qfile+' '+mfile+' -o '+outfile
     else:
-        cmd = 'minimap2 '+config+' '+dbfile+' '+qfile+' -o '+outfile
+        cmd = _minimap2+' '+config+' '+dbfile+' '+qfile+' -o '+outfile
 
     # call the aligner
     subprocess.run(cmd.split(' '))
@@ -872,52 +973,58 @@ def get_best(df, col, metric='AS', stat='idxmax'):
     return df.iloc[idx[metric].values].reset_index()
 
 def run_msa(MSA_infiles, aligner='spoa', config='-l 0 -r 2', thread_lock=True):
-    '''
-    Wrapper for spoa or mafft multi-sequence aligner
-    MSA_infile = list of files for input with .fq or .fa at end of filename
-    aligner = aligner to use. Default = spoa
-    config = configs to pass to aligner
-    output is saved in same directory as input files except the file extension is now .out
-    thread_lock = makes sure all spoa calls run to completion
-                  switching to false and using system pipe can be faster,
-                  but danger for process collisions
-    '''
-    processes = []
-    if thread_lock:
-        for msa_in in MSA_infiles:
-            MSA_outfile = msa_in + '.out'
-            f = open(MSA_outfile, 'w') # open file for writing std out
-            cmd = aligner+' '+config+' '+msa_in
-            processes.append([subprocess.Popen(cmd.split(' '), stdout = f), f]) # submit the job
+	'''
+	Wrapper for spoa or mafft multi-sequence aligner
+	MSA_infile = list of files for input with .fq or .fa at end of filename
+	aligner = aligner to use. Default = spoa
+	config = configs to pass to aligner
+	output is saved in same directory as input files except the file extension is now .out
+	thread_lock = makes sure all spoa calls run to completion
+				  switching to false and using system pipe can be faster,
+				  but danger for process collisions
+	'''
+	# set the aligner path
+	if aligner=='spoa':
+		aligner = _spoa
+	elif aligner=='mafft':
+		aligner = _mafft
 
-        # wait until all jobs finish. Jobs have max time of 120s
-        for j, f in processes:
-            retval = j.wait(120)
-            f.close() # close the file
-            if retval!=0:
-                logging.error('syntax error on spoa call: '+j)
-                return -1
-    else:
-        cmd = ''
-        for msa_in in MSA_infiles:
-            MSA_outfile = msa_in + '.out'
-            f = open(MSA_outfile, 'w') # open file for writing std out
-            cmd+= aligner+' '+config+' '+msa_in+' > '+MSA_outfile+' & '
-        subprocess.run(cmd[:-3], shell = True) # submit the job
+	processes = []
+	if thread_lock:
+		for msa_in in MSA_infiles:
+			MSA_outfile = msa_in + '.out'
+			f = open(MSA_outfile, 'w') # open file for writing std out
+			cmd = aligner+' '+config+' '+msa_in
+			processes.append([subprocess.Popen(cmd.split(' '), stdout = f), f]) # submit the job
+
+		# wait until all jobs finish. Jobs have max time of 120s
+		for j, f in processes:
+			retval = j.wait(120)
+			f.close() # close the file
+			if retval!=0:
+				logging.error('syntax error on spoa call: '+j)
+				return -1
+	else:
+		cmd = ''
+		for msa_in in MSA_infiles:
+			MSA_outfile = msa_in + '.out'
+			f = open(MSA_outfile, 'w') # open file for writing std out
+			cmd+= aligner+' '+config+' '+msa_in+' > '+MSA_outfile+' & '
+		subprocess.run(cmd[:-3], shell = True) # submit the job
 
 def read_spoa(fname):
-    '''
-    Parses output from spoa multi-sequence aligner
-    updated to read fasta output from spoa
-    returns consensus sequence
-    '''
-    seq = read_fasta(fname, low_mem=False)
-    seq = seq.iloc[-1]['sequence'] # last entry of output from spoa is the consensus sequence
-    seq = seq.replace('-','')
-    if len(seq) < 1:
-        logging.warning('read_spoa: warning no consensus sequence in '+fname)
-    return seq
-    
+	'''
+	Parses output from spoa multi-sequence aligner
+	updated to read fasta output from spoa
+	returns consensus sequence
+	'''
+	seq = read_fasta(fname, low_mem=False)
+	seq = seq.iloc[-1]['sequence'] # last entry of output from spoa is the consensus sequence
+	seq = seq.replace('-','')
+	if len(seq) < 1:
+		logging.warning('read_spoa: warning no consensus sequence in '+fname)
+	return seq
+
 def batch_file_remove(files):
     '''
     Function to call rm and batch remove a list of files
@@ -1527,13 +1634,13 @@ def cluster_spoa_merge(df, config='-l 0 -r 0', workspace='./clust_spoa_merge/', 
                 if c1 and c2:
                     fname = workspace + str(c_id) + '.fa'
                     seqlist = pd.concat([df_fa[['id','sequence']], df_fq[['id','sequence']]])
-                    write_fasta(fname, seqlist[['id','sequence']].values)
+                    write_fasta(fname, seqlist[['id','sequence']])
                 elif c1:
                     fname = workspace + str(c_id) + '.fa'
-                    write_fasta(fname, df_fa[['id','sequence']].values)
+                    write_fasta(fname, df_fa[['id','sequence']])
                 elif c2:
                     fname = workspace + str(c_id) + '.fq'
-                    write_fastq(fname, df_fq[['id','sequence','quality']].values)
+                    write_fastq(fname, df_fq[['id','sequence','quality']])
                 df_fa = []
                 df_fq = []
                 MSA_infile.append(fname)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Consensus error correction for nanopore sequencing
-# bilgenurb@gmail.com
+# bbaloglu@uoguelph.ca
 
 # Loading libraries
 import numpy as np
@@ -266,7 +266,7 @@ def perform_MSA(df, frags, batch_size=100, folder='./msa/', thread_lock=True, co
         # submit to spoa every 100 files or whatever batch_size is
         if len(MSA_infile) > 0:
             logging.info('MSA progress = '+str(j)+'/'+str(N_chunks))
-            bpy.run_msa(MSA_infile, aligner='spoa', config=config, thread_lock=thread_lock)
+            bpy.run_msa(MSA_infile, config=config, thread_lock=thread_lock)
             MSA_infile = []
  
 def get_spoa_consensus(MSA_outfile):
@@ -779,347 +779,365 @@ def update_config(default, new_config):
             json.dump(default, f, indent=2)
     return default
 
+def update_toolchain(config):
+	'''
+	Update the paths to the aligner tools
+	'''	
+	bpy._minimap2 = config['minimap2_path']
+	bpy._spoa = config['spoa_path']
+	bpy.check_toolchain()
+
 #########################################################################################################
 # Actual sequence of code in pipeline begins here
 def main():
-    parser = argparse.ArgumentParser(description='aSHuRE: a consensus error correction pipeline for nanopore sequencing',
-                        formatter_class=argparse.RawTextHelpFormatter)
-    # variable to store default configs
-    config = {}
+	parser = argparse.ArgumentParser(description='aSHuRE: a consensus error correction pipeline for nanopore sequencing',
+						formatter_class=argparse.RawTextHelpFormatter)
+	# variable to store default configs
+	config = {}
+	# define paths to the aligner tools
+	config['spoa_path'] = 'spoa'
+	parser.add_argument('-spoa', dest='spoa_path', type=str, help='path to spoa executable')
+	config['minimap2_path'] = 'minimap2'
+	parser.add_argument('-minimap2', dest='minimap2_path', type=str, help='path to minimap2 executable')
+	# add subcommands for modifying the run configuration 
+	subparser = parser.add_subparsers(title='subcommands', dest='subcommand')
+	run_parser = subparser.add_parser('run', formatter_class=argparse.RawTextHelpFormatter, help='suboptions for running the pipeline')
+	config['fastq']=[]
+	run_parser.add_argument('-fq', dest='fastq', type=str, nargs='+', help='fastq files from the basecaller')
+	config['exclude']=[]
+	run_parser.add_argument('-e', dest='exclude', type=str, nargs='+', default=[], help='frags files containing reads which are excluded from search')
+	config['primer_file']='primers.csv'
+	run_parser.add_argument('-p', dest='primer_file', type=str,
+			help='''csv file containing forward and reverse primers used.
+	This must have at least columns [fwd_id, fwd_seq, rev_id, rev_seq]''')
+	config['db_file']='pseudodb.csv.gz'
+	run_parser.add_argument('-db', dest='db_file', type=str,
+			help='''reference sequences to search fragments with (optional). If this is not provided prfg is run.
+	This file can be a csv with columns [id, sequence] or fastq or fastq format
+	If prfg is run, then the new pseudo reference sequences are written to this file''')
+	config['workspace']='./workspace/'
+	run_parser.add_argument('-w', dest='workspace', type=str, help='workspace folder where frags, msa, clusters, and other output are stored')
+	config['cons_file']='consensus.csv.gz'
+	run_parser.add_argument('-o1', dest='cons_file', type=str, help='output csv file for consensus sequence information')
+	config['pmatch_file']='pmatch.csv.gz'
+	run_parser.add_argument('-o2', dest='pmatch_file', type=str, help='output csv file for primer matches to each fastq read')
+	config['cin_file']='trimmed_'+config['cons_file']
+	run_parser.add_argument('-o3', dest='cin_file', type=str, help='input file for clustering and output for trimmed consensus')
+	config['cout_file']='clusters.csv.gz'
+	run_parser.add_argument('-o4', dest='cout_file', type=str, help='output csv file for sequence of cluster centers')
+	config['log_file']='ashure.log'
+	config['low_mem']=False
+	run_parser.add_argument('--low_mem', dest='low_mem', action='store_true', help='enable optimizations that reduce RAM used')
+	run_parser.add_argument('-log', dest='log_file', type=str, help='log file where pipeline progress is logged')
+	config['config_file']=''
+	run_parser.add_argument('-c', dest='config_file', type=str,
+			help='''Input json file where run configuration is stored.
+	If none is provided, the default config is used.''')
+	run_parser.add_argument('-r', dest='run', type=str,
+			help='''Specify what subsets of this pipeline to run
+	prfg = generate pseudo reference database using primer information
+	fgs  = find repeated fragments in fastq reads
+	msa  = run multi-sequence alignment on repeated reads
+	cons = read consensus output after multi-sequence alignment
+	fpmr = map primers to each consensus fastq read
+	trmc = trim primers from consensus reads
+	clst = running clustering on trimmed reads
 
-    # add subcommands for modifying the run configuration 
-    subparser = parser.add_subparsers(title='subcommands', dest='subcommand')
-    run_parser = subparser.add_parser('run', formatter_class=argparse.RawTextHelpFormatter, help='suboptions for running the pipeline')
-    config['fastq']=[]
-    run_parser.add_argument('-fq', dest='fastq', type=str, nargs='+', help='fastq files from the basecaller')
-    config['exclude']=[]
-    run_parser.add_argument('-e', dest='exclude', type=str, nargs='+', default=[], help='frags files containing reads which are excluded from search')
-    config['primer_file']='primers.csv'
-    run_parser.add_argument('-p', dest='primer_file', type=str,
-            help='''csv file containing forward and reverse primers used.
-    This must have at least columns [fwd_id, fwd_seq, rev_id, rev_seq]''')
-    config['db_file']='pseudodb.csv.gz'
-    run_parser.add_argument('-db', dest='db_file', type=str,
-            help='''reference sequences to search fragments with (optional). If this is not provided prfg is run.
-    This file can be a csv with columns [id, sequence] or fastq or fastq format
-    If prfg is run, then the new pseudo reference sequences are written to this file''')
-    config['workspace']='./workspace/'
-    run_parser.add_argument('-w', dest='workspace', type=str, help='workspace folder where frags, msa, clusters, and other output are stored')
-    config['cons_file']='consensus.csv.gz'
-    run_parser.add_argument('-o1', dest='cons_file', type=str, help='output csv file for consensus sequence information')
-    config['pmatch_file']='pmatch.csv.gz'
-    run_parser.add_argument('-o2', dest='pmatch_file', type=str, help='output csv file for primer matches to each fastq read')
-    config['cin_file']='trimmed_'+config['cons_file']
-    run_parser.add_argument('-o3', dest='cin_file', type=str, help='input file for clustering and output for trimmed consensus')
-    config['cout_file']='clusters.csv.gz'
-    run_parser.add_argument('-o4', dest='cout_file', type=str, help='output csv file for sequence of cluster centers')
-    config['log_file']='ashure.log'
-    config['low_mem']=False
-    run_parser.add_argument('--low_mem', dest='low_mem', action='store_true', help='enable optimizations that reduce RAM used')
-    run_parser.add_argument('-log', dest='log_file', type=str, help='log file where pipeline progress is logged')
-    config['config_file']=''
-    run_parser.add_argument('-c', dest='config_file', type=str,
-            help='''Input json file where run configuration is stored.
-    If none is provided, the default config is used.''')
-    run_parser.add_argument('-r', dest='run', type=str,
-            help='''Specify what subsets of this pipeline to run
-    prfg = generate pseudo reference database using primer information
-    fgs  = find repeated fragments in fastq reads
-    msa  = run multi-sequence alignment on repeated reads
-    cons = read consensus output after multi-sequence alignment
-    fpmr = map primers to each consensus fastq read
-    trmc = trim primers from consensus reads
-    clst = running clustering on trimmed reads
-    
-    -r msa,cons runs only multi-seq alignment and consensus readout''')
- 
-    # config for pseudo reference generator
-    prfg_parser = subparser.add_parser('prfg', formatter_class=argparse.RawTextHelpFormatter, help='suboptions for pseudo reference generator')
-    config['prfg_fs']='500-1200'
-    prfg_parser.add_argument('-fs', dest='prfg_fs', type=str,
-            help='''fastq read size ranges to search for primers
-    -fs 100-200             searches for fragments in reads of length 100-200bp
-    -fs 100-200,500-900     searches for fragments in reads of length 100-200bp and 500-900bp''')
-    config['prfg_config']='-k5 -w1 -s 20 -P'
-    prfg_parser.add_argument('-c', dest='prfg_config', type=str, help='config passed to minimap2')
-    prfg_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
-    prfg_parser.add_argument('-r', dest='run_prfg', action='store_true', help='generate pseudo reference database now with the current configuration')
-    prfg_parser.add_argument('-fq', dest='fastq', type=str, nargs='+', default=[], help='fastq reads to search')
-    prfg_parser.add_argument('-e', dest='exclude', type=str, nargs='+', default=[], help='frags files containing reads which are excluded from search')
-    prfg_parser.add_argument('-p', dest='primer_file', type=str,
-            help='''csv file containing forward and reverse primers used.
-    This must have at least columns [fwd_id, fwd_seq, rev_id, rev_seq]''')
-    prfg_parser.add_argument('-o', dest='db_file', type=str, help='output csv file of pseudo reference sequences')
-    prfg_parser.add_argument('--low_mem', dest='low_mem', action='store_true', help='enable optimizations that reduce RAM used')
-    
-    # config for repeat frag finder
-    fgs_parser = subparser.add_parser('fgs', help='suboptions for repeat fragment finder')
-    config['fgs_config']='-k10 -w1'
-    fgs_parser.add_argument('-c', dest='fgs_config', type=str, help='config options passed to minimap2')
-    fgs_parser.add_argument('-fq', dest='fastq', type=str, nargs='+', default=[], help='fastq reads to search')
-    fgs_parser.add_argument('-e', dest='exclude', type=str, nargs='+', default=[], help='frags files containing reads which are excluded from search')
-    fgs_parser.add_argument('-db', dest='db_file', type=str, help='file containing reference sequences used in fragment search')
-    config['frag_folder']='./frags/'
-    fgs_parser.add_argument('-o', dest='frag_folder', type=str, help='folder where frags csv files are stored')
-    fgs_parser.add_argument('-r', dest='run_fgs', action='store_true', help='run repeat fragment finder')
-    fgs_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
-    fgs_parser.add_argument('--low_mem', dest='low_mem', action='store_true', help='enable optimizations that reduce RAM used')
+	-r msa,cons runs only multi-seq alignment and consensus readout''')
 
-    # config for multi-sequence alignment
-    msa_parser = subparser.add_parser('msa', help='suboptions for multi-sequence alignment')
-    config['msa_config']='-n -15 -g -10 -l 0 -r 0'
-    msa_parser.add_argument('-c', dest='msa_config', type=str, help='config options passed to spoa multi-sequence aligner')
-    msa_parser.add_argument('-fq', dest='fastq', nargs='+', type=str, help='fastq files')
-    msa_parser.add_argument('-i', dest='frag_folder', type=str, help='folder where frags csv files are stored')
-    config['msa_folder']='./msa/'
-    msa_parser.add_argument('-o1', dest='msa_folder', type=str, help='folder where msa input and output files are saved')
-    msa_parser.add_argument('-o2', dest='cons_file', type=str, help='output csv file for consensus sequences')
-    msa_parser.add_argument('-r1', dest='run_msa', action='store_true', help='run multi-sequence alignment')
-    msa_parser.add_argument('-r2', dest='run_cons', action='store_true', help='read consensus after multi-sequence alignment')
-    msa_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
-    msa_parser.add_argument('--low_mem', dest='low_mem', action='store_true', help='enable optimizations that reduce RAM used')
+	# config for pseudo reference generator
+	prfg_parser = subparser.add_parser('prfg', formatter_class=argparse.RawTextHelpFormatter, help='suboptions for pseudo reference generator')
+	config['prfg_fs']='500-1200'
+	prfg_parser.add_argument('-fs', dest='prfg_fs', type=str,
+			help='''fastq read size ranges to search for primers
+	-fs 100-200             searches for fragments in reads of length 100-200bp
+	-fs 100-200,500-900     searches for fragments in reads of length 100-200bp and 500-900bp''')
+	config['prfg_config']='-k5 -w1 -s 20 -P'
+	prfg_parser.add_argument('-c', dest='prfg_config', type=str, help='config passed to minimap2')
+	prfg_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
+	prfg_parser.add_argument('-r', dest='run_prfg', action='store_true', help='generate pseudo reference database now with the current configuration')
+	prfg_parser.add_argument('-fq', dest='fastq', type=str, nargs='+', default=[], help='fastq reads to search')
+	prfg_parser.add_argument('-e', dest='exclude', type=str, nargs='+', default=[], help='frags files containing reads which are excluded from search')
+	prfg_parser.add_argument('-p', dest='primer_file', type=str,
+			help='''csv file containing forward and reverse primers used.
+	This must have at least columns [fwd_id, fwd_seq, rev_id, rev_seq]''')
+	prfg_parser.add_argument('-o', dest='db_file', type=str, help='output csv file of pseudo reference sequences')
+	prfg_parser.add_argument('--low_mem', dest='low_mem', action='store_true', help='enable optimizations that reduce RAM used')
 
-    # config for matching primers to reads
-    fpmr_parser = subparser.add_parser('fpmr', help='suboptions for matching primers to consensus reads')
-    config['fpmr_config']='-k5 -w1 -s 20 -P'
-    fpmr_parser.add_argument('-c', dest='fpmr_config', help='config options passed to minimap2 aligner')
-    fpmr_parser.add_argument('-i', dest='cons_file', help='input untrimmed consensus csv files')
-    fpmr_parser.add_argument('-p', dest='primer_file', type=str,
-            help='''csv file containing forward and reverse primers used.
-    This must have at least columns [fwd_id, fwd_seq, rev_id, rev_seq]''')
-    fpmr_parser.add_argument('-o1', dest='pmatch_file', help='csv file containing primer match information')
-    fpmr_parser.add_argument('-o2', dest='cin_file', help='csv file containing trimmed consensus reads')
-    fpmr_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
-    fpmr_parser.add_argument('-r1', dest='run_fpmr', action='store_true', help='run primer matching')
-    fpmr_parser.add_argument('-r2', dest='run_trmc', action='store_true', help='trim primers from reads')
+	# config for repeat frag finder
+	fgs_parser = subparser.add_parser('fgs', help='suboptions for repeat fragment finder')
+	config['fgs_config']='-k10 -w1'
+	fgs_parser.add_argument('-c', dest='fgs_config', type=str, help='config options passed to minimap2')
+	fgs_parser.add_argument('-fq', dest='fastq', type=str, nargs='+', default=[], help='fastq reads to search')
+	fgs_parser.add_argument('-e', dest='exclude', type=str, nargs='+', default=[], help='frags files containing reads which are excluded from search')
+	fgs_parser.add_argument('-db', dest='db_file', type=str, help='file containing reference sequences used in fragment search')
+	config['frag_folder']='./frags/'
+	fgs_parser.add_argument('-o', dest='frag_folder', type=str, help='folder where frags csv files are stored')
+	fgs_parser.add_argument('-r', dest='run_fgs', action='store_true', help='run repeat fragment finder')
+	fgs_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
+	fgs_parser.add_argument('--low_mem', dest='low_mem', action='store_true', help='enable optimizations that reduce RAM used')
 
-    # config for clustering
-    clst_parser = subparser.add_parser('clst', help='suboptions for clustering')
-    clst_parser.add_argument('-i', dest='cin_file', type=str, help='input csv, fasta, or fastq file of sequences to cluster')
-    clst_parser.add_argument('-o', dest='cout_file', type=str, help='output csv file for cluster center sequences')
-    config['clst_init']=''
-    clst_parser.add_argument('-init', dest='clst_init', type=str, help='csv, fasta, or fastq file containing initial cluster centers.')
-    config['clst_folder']='./clusters/'
-    clst_parser.add_argument('-f', dest='clst_folder', type=int, help='folder where clustering work is saved')
-    config['clst_min_k']=5
-    clst_parser.add_argument('-k', dest='clst_min_k', type=int, help='min_cluster_size')
-    config['clst_csize']=20
-    clst_parser.add_argument('-cs', dest='clst_csize', type=int, help='number of sequences from cluster center to multi-align into center sequence')
-    config['clst_th_m']=0.9
-    clst_parser.add_argument('-tm', dest='clst_th_m', type=float, help='threshold for marking clusters to merge')
-    config['clst_th_s']=4
-    clst_parser.add_argument('-ts', dest='clst_th_s', type=float, help='how many partition to split the sequences for sweep')
-    config['clst_N']=2000
-    clst_parser.add_argument('-N', dest='clst_N', type=int, help='size of sequence subsample')
-    config['clst_N_iter']=10
-    clst_parser.add_argument('-iter', dest='clst_N_iter', type=int, help='number of iterations to run clustering')
-    config['clst_iter_out'] = 'clst'
-    clst_parser.add_argument('-tout', dest='clst_iter_out', type=str, help='prefix of file to save cluster centers after each iteration')
-    config['clst_track'] = False
-    clst_parser.add_argument('--track', dest='clst_track', action='store_true', help='keep cluster centers after each iteration')
-    config['clst_pw_config']='-k15 -w10 -p 0.9 -D'
-    clst_parser.add_argument('-pw_config', dest='clst_pw_config', type=str, help='config passed to minimap2')
-    clst_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
-    clst_parser.add_argument('-r', dest='run_clst', action='store_true', help='run clustering')
-    args = parser.parse_args()
-    bpy.init_log(config['log_file'])
-    if args.subcommand==None:
-        logging.error('please select subcommand to run')
-        sys.exit(1)
+	# config for multi-sequence alignment
+	msa_parser = subparser.add_parser('msa', help='suboptions for multi-sequence alignment')
+	config['msa_config']='-n -15 -g -10 -l 0 -r 0'
+	msa_parser.add_argument('-c', dest='msa_config', type=str, help='config options passed to spoa multi-sequence aligner')
+	msa_parser.add_argument('-fq', dest='fastq', nargs='+', type=str, help='fastq files')
+	msa_parser.add_argument('-i', dest='frag_folder', type=str, help='folder where frags csv files are stored')
+	config['msa_folder']='./msa/'
+	msa_parser.add_argument('-o1', dest='msa_folder', type=str, help='folder where msa input and output files are saved')
+	msa_parser.add_argument('-o2', dest='cons_file', type=str, help='output csv file for consensus sequences')
+	msa_parser.add_argument('-r1', dest='run_msa', action='store_true', help='run multi-sequence alignment')
+	msa_parser.add_argument('-r2', dest='run_cons', action='store_true', help='read consensus after multi-sequence alignment')
+	msa_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
+	msa_parser.add_argument('--low_mem', dest='low_mem', action='store_true', help='enable optimizations that reduce RAM used')
 
-    # apply new settings
-    config = update_config(config, vars(args))
+	# config for matching primers to reads
+	fpmr_parser = subparser.add_parser('fpmr', help='suboptions for matching primers to consensus reads')
+	config['fpmr_config']='-k5 -w1 -s 20 -P'
+	fpmr_parser.add_argument('-c', dest='fpmr_config', help='config options passed to minimap2 aligner')
+	fpmr_parser.add_argument('-i', dest='cons_file', help='input untrimmed consensus csv files')
+	fpmr_parser.add_argument('-p', dest='primer_file', type=str,
+			help='''csv file containing forward and reverse primers used.
+	This must have at least columns [fwd_id, fwd_seq, rev_id, rev_seq]''')
+	fpmr_parser.add_argument('-o1', dest='pmatch_file', help='csv file containing primer match information')
+	fpmr_parser.add_argument('-o2', dest='cin_file', help='csv file containing trimmed consensus reads')
+	fpmr_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
+	fpmr_parser.add_argument('-r1', dest='run_fpmr', action='store_true', help='run primer matching')
+	fpmr_parser.add_argument('-r2', dest='run_trmc', action='store_true', help='trim primers from reads')
 
-    # default runs
-    keys = ['prfg','fgs','msa','cons','fpmr','trmc','clst']
-    for k in keys:
-        config['run_'+k]=False # set everything to false
+	# config for clustering
+	clst_parser = subparser.add_parser('clst', help='suboptions for clustering')
+	clst_parser.add_argument('-i', dest='cin_file', type=str, help='input csv, fasta, or fastq file of sequences to cluster')
+	clst_parser.add_argument('-o', dest='cout_file', type=str, help='output csv file for cluster center sequences')
+	config['clst_init']=''
+	clst_parser.add_argument('-init', dest='clst_init', type=str, help='csv, fasta, or fastq file containing initial cluster centers.')
+	config['clst_folder']='./clusters/'
+	clst_parser.add_argument('-f', dest='clst_folder', type=int, help='folder where clustering work is saved')
+	config['clst_min_k']=5
+	clst_parser.add_argument('-k', dest='clst_min_k', type=int, help='min_cluster_size')
+	config['clst_csize']=20
+	clst_parser.add_argument('-cs', dest='clst_csize', type=int, help='number of sequences from cluster center to multi-align into center sequence')
+	config['clst_th_m']=0.9
+	clst_parser.add_argument('-tm', dest='clst_th_m', type=float, help='threshold for marking clusters to merge')
+	config['clst_th_s']=4
+	clst_parser.add_argument('-ts', dest='clst_th_s', type=float, help='how many partition to split the sequences for sweep')
+	config['clst_N']=2000
+	clst_parser.add_argument('-N', dest='clst_N', type=int, help='size of sequence subsample')
+	config['clst_N_iter']=10
+	clst_parser.add_argument('-iter', dest='clst_N_iter', type=int, help='number of iterations to run clustering')
+	config['clst_iter_out'] = 'clst'
+	clst_parser.add_argument('-tout', dest='clst_iter_out', type=str, help='prefix of file to save cluster centers after each iteration')
+	config['clst_track'] = False
+	clst_parser.add_argument('--track', dest='clst_track', action='store_true', help='keep cluster centers after each iteration')
+	config['clst_pw_config']='-k15 -w10 -p 0.9 -D'
+	clst_parser.add_argument('-pw_config', dest='clst_pw_config', type=str, help='config passed to minimap2')
+	clst_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
+	clst_parser.add_argument('-r', dest='run_clst', action='store_true', help='run clustering')
+	args = parser.parse_args()
+	# initialize logging
+	bpy.init_log(config['log_file'])
+	
+	if args.subcommand==None:
+		logging.error('please select subcommand to run')
+		sys.exit(1)
 
-    # if nothing is selected, then default is to run everything
-    if args.subcommand=='run':
-        if type(args.run)==type(None):
-            if args.db_file==None:
-                config['run_prfg']=True
-            else:
-                config['run_prfg']=False
-            keys = ['fgs','msa','cons','fpmr','trmc','clst']
-            for k in keys:
-                config['run_'+k]=True
-        elif type(args.run)==str:
-            args.run = args.run.split(',')
-            keys = ['prfg','fgs','msa','cons','fpmr','trmc','clst']
-            for k in keys:
-                config['run_'+k] = k in args.run
-    elif args.subcommand in keys:
-        user_config = vars(args)
-        for k in user_config.keys():
-            if 'run_' in k:
-                config[k] = user_config[k]
+	# apply new settings
+	config = update_config(config, vars(args))
+	# update paths to the aligner tools
+	update_toolchain(config)	
 
-    # Print run settings
-    logging.info('Running the pipeline')
-    logging.info('config_file = '+config['config_file'])
-    logging.info('primer_file = '+config['primer_file'])
-    logging.info('pseudo_fs   = '+config['prfg_fs'])
-    logging.info('prfg_config = '+config['prfg_config'])
-    logging.info('db_file     = '+config['db_file'])
-    logging.info('N fastq     = '+str(len(config['fastq'])))
-    logging.info('frag_folder = '+config['frag_folder'])
-    logging.info('fgs_config  = '+config['fgs_config'])
-    logging.info('msa_folder  = '+config['msa_folder'])
-    logging.info('msa_config  = '+config['msa_config'])
-    logging.info('cons_file        = '+config['cons_file'])
-    logging.info('fpmr_config      = '+config['fpmr_config'])
-    logging.info('pmatch_file      = '+config['pmatch_file'])
-    logging.info('cin_file         = '+config['cin_file'])
-    logging.info('cout_file        = '+config['cout_file'])
-    logging.info('clst_init        = '+config['clst_init'])
-    logging.info('clst_folder      = '+config['clst_folder'])
-    logging.info('clst_pw_config   = '+config['clst_pw_config'])
-    logging.info('clst_N      = '+str(config['clst_N']))
-    logging.info('clst_th_s   = '+str(config['clst_th_s']))
-    logging.info('clst_th_m   = '+str(config['clst_th_m']))
-    logging.info('clst_min_k  = '+str(config['clst_min_k']))
-    logging.info('clst_csize  = '+str(config['clst_csize']))
-    logging.info('clst_N_iter = '+str(config['clst_N_iter']))
-    logging.info('workspace        = '+config['workspace'])
-    logging.info('Run Pseudoref generator = '+str(config['run_prfg']))
-    logging.info('Run Fragment Search     = '+str(config['run_fgs']))
-    logging.info('Run Multi-Seq Alignment = '+str(config['run_msa']))
-    logging.info('Run Consensus           = '+str(config['run_cons']))
-    logging.info('Run primer match        = '+str(config['run_fpmr']))
-    logging.info('Run trim primers        = '+str(config['run_trmc']))
-    logging.info('Run clustering          = '+str(config['run_clst']))
-    logging.info('low_mem                 = '+str(config['low_mem']))
+	# default runs
+	keys = ['prfg','fgs','msa','cons','fpmr','trmc','clst']
+	for k in keys:
+		config['run_'+k]=False # set everything to false
 
-    # Load the fastq data
-    if config['run_fgs'] or config['run_msa'] or config['run_prfg']:
-        logging.info('loading fastq data')
-        if len(config['fastq'])==0:
-            logging.error('no fastq files provided')
-            sys.exit(1)
-        reads = bpy.load_ONT_fastq(config['fastq'], low_mem=config['low_mem'])
-        # exclude reads which already have hits
-        if len(config['exclude']) > 0:
-            L1 = len(reads)
-            exclude = pd.concat([pd.read_csv(f) for f in config['exclude']])
-            reads = reads[reads['id'].isin(exclude['query_id'])==False]
-            del exclude
-            logging.info('searching subset '+str(len(reads))+'/'+str(L1))
-    
-    # run pseudo reference database generator if selected
-    if config['run_prfg']:
-        # load primers
-        primers = bpy.load_primers(config['primer_file'])
-        # generate pseudo reference database using primer info
-        logging.info('Generating pseudo reference database')
-        ref = generate_pseudo_refdb(primers, reads, block=10000, fs=config['prfg_fs'], config=config['prfg_config'])
-        ref.to_csv(config['db_file'], index=False, compression='infer')
-    
-    # load reference database
-    if config['run_fgs']:
-        ref = bpy.load_file(config['db_file'])
+	# if nothing is selected, then default is to run everything
+	if args.subcommand=='run':
+		if type(args.run)==type(None):
+			if args.db_file==None:
+				config['run_prfg']=True
+			else:
+				config['run_prfg']=False
+			keys = ['fgs','msa','cons','fpmr','trmc','clst']
+			for k in keys:
+				config['run_'+k]=True
+		elif type(args.run)==str:
+			args.run = args.run.split(',')
+			keys = ['prfg','fgs','msa','cons','fpmr','trmc','clst']
+			for k in keys:
+				config['run_'+k] = k in args.run
+	elif args.subcommand in keys:
+		user_config = vars(args)
+		for k in user_config.keys():
+			if 'run_' in k:
+				config[k] = user_config[k]
 
-    if config['run_fgs']:
-        # search or RCA fragments in reads
-        logging.info('Searching for RCA frags in reads')
-        find_RCA_frags(ref, reads, block=10000, output=config['frag_folder'], config=config['fgs_config'])
-        logging.info('Aligner done')
+	# Print run settings
+	logging.info('Running the pipeline')
+	logging.info('minimap2_path = '+config['minimap2_path'])
+	logging.info('spoa_path     = '+config['spoa_path'])
+	logging.info('config_file = '+config['config_file'])
+	logging.info('primer_file = '+config['primer_file'])
+	logging.info('pseudo_fs   = '+config['prfg_fs'])
+	logging.info('prfg_config = '+config['prfg_config'])
+	logging.info('db_file     = '+config['db_file'])
+	logging.info('N fastq     = '+str(len(config['fastq'])))
+	logging.info('frag_folder = '+config['frag_folder'])
+	logging.info('fgs_config  = '+config['fgs_config'])
+	logging.info('msa_folder  = '+config['msa_folder'])
+	logging.info('msa_config  = '+config['msa_config'])
+	logging.info('cons_file        = '+config['cons_file'])
+	logging.info('fpmr_config      = '+config['fpmr_config'])
+	logging.info('pmatch_file      = '+config['pmatch_file'])
+	logging.info('cin_file         = '+config['cin_file'])
+	logging.info('cout_file        = '+config['cout_file'])
+	logging.info('clst_init        = '+config['clst_init'])
+	logging.info('clst_folder      = '+config['clst_folder'])
+	logging.info('clst_pw_config   = '+config['clst_pw_config'])
+	logging.info('clst_N      = '+str(config['clst_N']))
+	logging.info('clst_th_s   = '+str(config['clst_th_s']))
+	logging.info('clst_th_m   = '+str(config['clst_th_m']))
+	logging.info('clst_min_k  = '+str(config['clst_min_k']))
+	logging.info('clst_csize  = '+str(config['clst_csize']))
+	logging.info('clst_N_iter = '+str(config['clst_N_iter']))
+	logging.info('workspace        = '+config['workspace'])
+	logging.info('Run Pseudoref generator = '+str(config['run_prfg']))
+	logging.info('Run Fragment Search     = '+str(config['run_fgs']))
+	logging.info('Run Multi-Seq Alignment = '+str(config['run_msa']))
+	logging.info('Run Consensus           = '+str(config['run_cons']))
+	logging.info('Run primer match        = '+str(config['run_fpmr']))
+	logging.info('Run trim primers        = '+str(config['run_trmc']))
+	logging.info('Run clustering          = '+str(config['run_clst']))
+	logging.info('low_mem                 = '+str(config['low_mem']))
 
-    if config['run_msa']:
-        # Loading the data for multi-sequence alignment
-        logging.info('Loading frags from '+config['frag_folder'])
-        files = glob.glob(config['frag_folder']+'fraginfo_*.csv.gz')
-        frags = pd.concat([pd.read_csv(f) for f in files])
-        # filtering out overlapping frags
-        frags = bpy.remove_overlaps(frags, metric='AS', thresh=50)
-        
-        # annotating information about the reads
-        logging.info('annotating reads')
-        df_frags = annotate_reads(frags)
-        frags = frags.merge(df_frags[['query_id','N frags']], on='query_id', how='left')
-        logging.info('annotation complete')
-        
-        # Run multi-sequence alignment on fragments
-        logging.info('Running multi-sequence aligner')
-        perform_MSA(reads, frags[frags['N frags'] > 1], batch_size=100, config=config['msa_config'], thread_lock=False, folder=config['msa_folder'])
-        logging.info('multi-sequence alignment done')
-    
-    # Generate consensus sequence and save the info
-    if config['run_cons']:
-        MSA_outfile = glob.glob(config['msa_folder']+'*.out')
-        logging.info('Number of MSA_outfiles='+str(len(MSA_outfile)))        
-        df = get_spoa_consensus(MSA_outfile)
+	# Load the fastq data
+	if config['run_fgs'] or config['run_msa'] or config['run_prfg']:
+		logging.info('loading fastq data')
+		if len(config['fastq'])==0:
+			logging.error('no fastq files provided')
+			sys.exit(1)
+		reads = bpy.load_ONT_fastq(config['fastq'], low_mem=config['low_mem'])
+		# exclude reads which already have hits
+		if len(config['exclude']) > 0:
+			L1 = len(reads)
+			exclude = pd.concat([pd.read_csv(f) for f in config['exclude']])
+			reads = reads[reads['id'].isin(exclude['query_id'])==False]
+			del exclude
+			logging.info('searching subset '+str(len(reads))+'/'+str(L1))
 
-        # Write the data to file
-        logging.info('Writing consensus output to: '+config['cons_file'])
-        df.to_csv(config['cons_file'], index=False, compression='infer')
-        logging.info('Consensus generation done')
-        
-    # match primers to read consensus
-    if config['run_fpmr']:
-        # load primer info
-        primers = bpy.load_primers(config['primer_file'])
+	# run pseudo reference database generator if selected
+	if config['run_prfg']:
+		# load primers
+		primers = bpy.load_primers(config['primer_file'])
+		# generate pseudo reference database using primer info
+		logging.info('Generating pseudo reference database')
+		ref = generate_pseudo_refdb(primers, reads, block=10000, fs=config['prfg_fs'], config=config['prfg_config'])
+		ref.to_csv(config['db_file'], index=False, compression='infer')
 
-        # load consensus info
-        logging.info('Loading cons_file: '+config['cons_file'])
-        df = pd.read_csv(config['cons_file'])
-        
-        # match the primers to consensus reads        
-        logging.info('Matching primers to reads')
-        df = df.rename(columns={'consensus':'sequence'})
-        df = match_primer_to_read(primers, df[['id','sequence']], config=config['fpmr_config'])
-        if len(df) == 0:
-            logging.error('Fwd and Rev primers were not found in reads')
-            sys.exit(1)
+	# load reference database
+	if config['run_fgs']:
+		ref = bpy.load_file(config['db_file'])
 
-        # Write the data to file
-        logging.info('Writing primer_match to '+config['pmatch_file'])
-        df.to_csv(config['pmatch_file'], index=False, compression='infer')
-        logging.info('primer matching done')
+	if config['run_fgs']:
+		# search or RCA fragments in reads
+		logging.info('Searching for RCA frags in reads')
+		find_RCA_frags(ref, reads, block=10000, output=config['frag_folder'], config=config['fgs_config'])
+		logging.info('Aligner done')
 
-    if config['run_trmc']:
-        # load data
-        logging.info('Loading pmatch_file: '+config['pmatch_file'])
-        df_pmatch = pd.read_csv(config['pmatch_file'])
-        logging.info('Loading cons_file: '+config['cons_file'])
-        df_cons = pd.read_csv(config['cons_file'])
-        df_cons = df_cons.rename(columns={'consensus':'sequence'})
+	if config['run_msa']:
+		# Loading the data for multi-sequence alignment
+		logging.info('Loading frags from '+config['frag_folder'])
+		files = glob.glob(config['frag_folder']+'fraginfo_*.csv.gz')
+		frags = pd.concat([pd.read_csv(f) for f in files])
+		# filtering out overlapping frags
+		frags = bpy.remove_overlaps(frags, metric='AS', thresh=50)
+		
+		# annotating information about the reads
+		logging.info('annotating reads')
+		df_frags = annotate_reads(frags)
+		frags = frags.merge(df_frags[['query_id','N frags']], on='query_id', how='left')
+		logging.info('annotation complete')
+		
+		# Run multi-sequence alignment on fragments
+		logging.info('Running multi-sequence aligner')
+		perform_MSA(reads, frags[frags['N frags'] > 1], batch_size=100, config=config['msa_config'], thread_lock=False, folder=config['msa_folder'])
+		logging.info('multi-sequence alignment done')
 
-        # run the trimming operation
-        logging.info('Trimming the reads')
-        df = trim_consensus(df_pmatch, df_cons)
+	# Generate consensus sequence and save the info
+	if config['run_cons']:
+		MSA_outfile = glob.glob(config['msa_folder']+'*.out')
+		logging.info('Number of MSA_outfiles='+str(len(MSA_outfile)))        
+		df = get_spoa_consensus(MSA_outfile)
 
-        # Write the data to file
-        logging.info('Writing trimmed consensus sequence')
-        df.to_csv(config['cin_file'], index=False, compression='infer')
-        logging.info('primer matching done')
-    
-    if config['run_clst']:
-        # load data
-        logging.info('Loading cin_file: '+config['cin_file'])
-        df = bpy.load_file(config['cin_file'])
-        df = df.rename(columns={'consensus':'sequence'})
-        df['id'] = ['read'+str(i) for i in range(0,len(df))]
-        # only work on sequences which have both forward and reverse primers
-        if 'fwd_primer_seq' in df.columns and 'rev_primer_seq' in df.columns:
-            df = df[df['fwd_primer_seq'].notna() & df['rev_primer_seq'].notna()]
-        # load initial cluster centers if given
-        df_d = []
-        if config['clst_init']!='':
-            df_d = bpy.load_file(config['clst_init'])
+		# Write the data to file
+		logging.info('Writing consensus output to: '+config['cons_file'])
+		df.to_csv(config['cons_file'], index=False, compression='infer')
+		logging.info('Consensus generation done')
+		
+	# match primers to read consensus
+	if config['run_fpmr']:
+		# load primer info
+		primers = bpy.load_primers(config['primer_file'])
 
-        # refine the clusters
-        data, flist = perform_cluster(df, df_d, max_iter=config['clst_N_iter'], csize=config['clst_csize'], N=config['clst_N'], th_s=config['clst_th_s'], th_m=config['clst_th_m'], pw_config=config['clst_pw_config'], msa_config=config['msa_config'], workspace=config['clst_folder'], track_file=config['clst_iter_out'], timestamp=True)
+		# load consensus info
+		logging.info('Loading cons_file: '+config['cons_file'])
+		df = pd.read_csv(config['cons_file'])
+		
+		# match the primers to consensus reads        
+		logging.info('Matching primers to reads')
+		df = df.rename(columns={'consensus':'sequence'})
+		df = match_primer_to_read(primers, df[['id','sequence']], config=config['fpmr_config'])
+		if len(df) == 0:
+			logging.error('Fwd and Rev primers were not found in reads')
+			sys.exit(1)
 
-        # clean up if needed
-        if config['clst_track']==False:
-            bpy.batch_file_remove(flist)
+		# Write the data to file
+		logging.info('Writing primer_match to '+config['pmatch_file'])
+		df.to_csv(config['pmatch_file'], index=False, compression='infer')
+		logging.info('primer matching done')
 
-        # save data
-        logging.info('Writing clustered sequences to '+config['cout_file'])
-        data.to_csv(config['cout_file'], index=False, compression='infer')
-        logging.info('clustering done')
-        
+	if config['run_trmc']:
+		# load data
+		logging.info('Loading pmatch_file: '+config['pmatch_file'])
+		df_pmatch = pd.read_csv(config['pmatch_file'])
+		logging.info('Loading cons_file: '+config['cons_file'])
+		df_cons = pd.read_csv(config['cons_file'])
+		df_cons = df_cons.rename(columns={'consensus':'sequence'})
+
+		# run the trimming operation
+		logging.info('Trimming the reads')
+		df = trim_consensus(df_pmatch, df_cons)
+
+		# Write the data to file
+		logging.info('Writing trimmed consensus sequence')
+		df.to_csv(config['cin_file'], index=False, compression='infer')
+		logging.info('primer matching done')
+
+	if config['run_clst']:
+		# load data
+		logging.info('Loading cin_file: '+config['cin_file'])
+		df = bpy.load_file(config['cin_file'])
+		df = df.rename(columns={'consensus':'sequence'})
+		df['id'] = ['read'+str(i) for i in range(0,len(df))]
+		# only work on sequences which have both forward and reverse primers
+		if 'fwd_primer_seq' in df.columns and 'rev_primer_seq' in df.columns:
+			df = df[df['fwd_primer_seq'].notna() & df['rev_primer_seq'].notna()]
+		# load initial cluster centers if given
+		df_d = []
+		if config['clst_init']!='':
+			df_d = bpy.load_file(config['clst_init'])
+
+		# refine the clusters
+		data, flist = perform_cluster(df, df_d, max_iter=config['clst_N_iter'], csize=config['clst_csize'], N=config['clst_N'], th_s=config['clst_th_s'], th_m=config['clst_th_m'], pw_config=config['clst_pw_config'], msa_config=config['msa_config'], workspace=config['clst_folder'], track_file=config['clst_iter_out'], timestamp=True)
+
+		# clean up if needed
+		if config['clst_track']==False:
+			bpy.batch_file_remove(flist)
+
+		# save data
+		logging.info('Writing clustered sequences to '+config['cout_file'])
+		data.to_csv(config['cout_file'], index=False, compression='infer')
+		logging.info('clustering done')
+			
 if __name__ == "__main__":
     main()
