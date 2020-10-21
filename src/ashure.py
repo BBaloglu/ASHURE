@@ -890,7 +890,14 @@ def main():
 	msa_parser.add_argument('-r2', dest='run_cons', action='store_true', help='read consensus after multi-sequence alignment')
 	msa_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
 	msa_parser.add_argument('--low_mem', dest='low_mem', action='store_true', help='enable optimizations that reduce RAM used')
-
+	config['msa_metric'] = 'AS'
+	msa_parser.add_argument('-m', dest='msa_metric', type=str, help='metric used to determine the best concatemer')
+	config['msa_thresh'] = 50
+	msa_parser.add_argument('-th', dest='msa_thresh', type=int, help='threshold overlap allowed between concatemers')
+	config['msa_batch_size'] = 100
+	msa_parser.add_argument('-bs', dest='msa_batch_size', type=int, help='batch size for spoa subprocess calls')
+	msa_parser.add_argument('-lock', dest='msa_thread_lock', action='store_true', help='make sure threads in sync for multi-alignment')
+	
 	# config for matching primers to reads
 	fpmr_parser = subparser.add_parser('fpmr', help='suboptions for matching primers to consensus reads')
 	config['fpmr_config']='-k5 -w1 -s 20 -P'
@@ -986,6 +993,10 @@ def main():
 	logging.info('fgs_config  = '+config['fgs_config'])
 	logging.info('msa_folder  = '+config['msa_folder'])
 	logging.info('msa_config  = '+config['msa_config'])
+	logging.info('msa_metric  = '+config['msa_metric'])
+	logging.info('msa_thresh  = '+str(config['msa_thresh']))
+	logging.info('msa_batch_size   = '+str(config['msa_batch_size']))
+	logging.info('msa_thread_lock  = '+str(config['msa_thread_lock']))
 	logging.info('cons_file        = '+config['cons_file'])
 	logging.info('fpmr_config      = '+config['fpmr_config'])
 	logging.info('pmatch_file      = '+config['pmatch_file'])
@@ -1050,7 +1061,7 @@ def main():
 		files = glob.glob(config['frag_folder']+'fraginfo_*.csv.gz')
 		frags = pd.concat([pd.read_csv(f) for f in files])
 		# filtering out overlapping frags
-		frags = bpy.remove_overlaps(frags, metric='AS', thresh=50)
+		frags = bpy.remove_overlaps(frags, metric=config['msa_metric'], thresh=config['msa_thresh'])
 		
 		# annotating information about the reads
 		logging.info('annotating reads')
@@ -1060,7 +1071,7 @@ def main():
 		
 		# Run multi-sequence alignment on fragments
 		logging.info('Running multi-sequence aligner')
-		perform_MSA(reads, frags[frags['N frags'] > 1], batch_size=100, config=config['msa_config'], thread_lock=False, folder=config['msa_folder'])
+		perform_MSA(reads, frags[frags['N frags'] > 1], batch_size=config['msa_batch_size'], config=config['msa_config'], thread_lock=config['msa_thread_lock'], folder=config['msa_folder'])
 		logging.info('multi-sequence alignment done')
 
 	# Generate consensus sequence and save the info
