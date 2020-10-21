@@ -1,0 +1,6 @@
+[submodule "vendors"]
+	path = vendors
+	url = https://github.com/zchen15/demo_data
+[submodule "external/demo_data"]
+	path = external/demo_data
+	url = https://github.com/zchen15/demo_data
