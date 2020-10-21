@@ -538,7 +538,7 @@ def run_bowtie2(query, database, workspace='./bowtie2/', config='-a --very-sensi
 	q_len = pd.DataFrame(q_len, columns = ['query_id','q_len'])
 	data = data.merge(q_len, on='query_id', how='left')
 	t_len = np.transpose([database['id'].values, [len(i) for i in database['sequence']]])
-	t_len = pd.DataFrame(t_len, columns = ['database_id','t_len']
+	t_len = pd.DataFrame(t_len, columns = ['database_id','t_len'])
 	# debug
 	data = data.merge(t_len, on='database_id', how='left')
 	data = data.dropna() # drop shit that doesn't have sequence length
