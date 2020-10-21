@@ -286,7 +286,7 @@ def get_spoa_consensus(MSA_outfile):
         data.append([rcaID, fname.split('.out')[0], nfrags, seq])
         if i%20000 == 0:
             logging.info('Consensus progress = '+str(i)+'/'+str(len(MSA_outfile)))
-    return pd.DataFrame(data, columns=['id','msa_input_file','N frags','consensus'])
+    return pd.DataFrame(data, columns=['id','msa_input_file','N frags','sequence'])
 
 def match_primer_to_read(primers, reads, thresh=10, config='-x map-ont', workspace='./match_pmr_to_rd/', compact=True, verbose=True):
     '''
@@ -306,7 +306,7 @@ def match_primer_to_read(primers, reads, thresh=10, config='-x map-ont', workspa
     database = primers.rename(columns={'rev_id':'id','rev_seq':'sequence'})
     df2 = bpy.run_minimap2(reads, database[['id','sequence']], workspace, config, build_index=True, use_index=True)
     # remove the working directory
-    subprocess.run(['rm','-r',workspace])
+    # debug subprocess.run(['rm','-r',workspace])
 
     # merge the primers that were found
     if len(df1) == 0 and len(df2)==0:
@@ -528,7 +528,7 @@ def trim_consensus(df_pmatch, df_cons):
     if len(seq) > 10:
         out.append([df[i,0], '', seq, rev_pmr])
     
-    df = pd.DataFrame(out, columns=['id','fwd_primer_seq','consensus','rev_primer_seq'])
+    df = pd.DataFrame(out, columns=['id','fwd_primer_seq','sequence','rev_primer_seq'])
     return df.merge(df_cons[['id','N frags','msa_input_file']])
 
 def perform_cluster(df_q, df_d=[], max_iter=1, csize=20, N=2000, th_s=2, th_m=0.9, pw_config='', msa_config='', workspace='./cluster/', track_file='', timestamp=True):
@@ -1049,9 +1049,10 @@ def main():
 	# load reference database
 	if config['run_fgs']:
 		ref = bpy.load_file(config['db_file'])
+		ref = bpy.check_id(ref, cols=['id']))
 
 	if config['run_fgs']:
-		# search or RCA fragments in reads
+		# search for RCA fragments in reads
 		logging.info('Searching for RCA frags in reads')
 		find_RCA_frags(ref, reads, block=10000, output=config['frag_folder'], config=config['fgs_config'])
 		logging.info('Aligner done')
@@ -1097,7 +1098,6 @@ def main():
 		
 		# match the primers to consensus reads        
 		logging.info('Matching primers to reads')
-		df = df.rename(columns={'consensus':'sequence'})
 		df = match_primer_to_read(primers, df[['id','sequence']], config=config['fpmr_config'])
 		if len(df) == 0:
 			logging.error('Fwd and Rev primers were not found in reads')
@@ -1114,7 +1114,6 @@ def main():
 		df_pmatch = pd.read_csv(config['pmatch_file'])
 		logging.info('Loading cons_file: '+config['cons_file'])
 		df_cons = pd.read_csv(config['cons_file'])
-		df_cons = df_cons.rename(columns={'consensus':'sequence'})
 
 		# run the trimming operation
 		logging.info('Trimming the reads')
@@ -1129,7 +1128,6 @@ def main():
 		# load data
 		logging.info('Loading cin_file: '+config['cin_file'])
 		df = bpy.load_file(config['cin_file'])
-		df = df.rename(columns={'consensus':'sequence'})
 		df['id'] = ['read'+str(i) for i in range(0,len(df))]
 		# only work on sequences which have both forward and reverse primers
 		if 'fwd_primer_seq' in df.columns and 'rev_primer_seq' in df.columns:
