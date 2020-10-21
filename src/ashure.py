@@ -896,6 +896,7 @@ def main():
 	msa_parser.add_argument('-th', dest='msa_thresh', type=int, help='threshold overlap allowed between concatemers')
 	config['msa_batch_size'] = 100
 	msa_parser.add_argument('-bs', dest='msa_batch_size', type=int, help='batch size for spoa subprocess calls')
+	config['msa_thread_lock'] = False
 	msa_parser.add_argument('-lock', dest='msa_thread_lock', action='store_true', help='make sure threads in sync for multi-alignment')
 	
 	# config for matching primers to reads

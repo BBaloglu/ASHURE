@@ -50,9 +50,8 @@ def check_toolchain():
 		else:
 			logging.info('check_toolchain: '+i+' found')
 
-# initialize paths to aligner tools and check if they exist
+# initialize paths to aligner tools
 init_vars()
-check_toolchain()
 
 def init_log(fname=None, level='DEBUG'):
 	'''
