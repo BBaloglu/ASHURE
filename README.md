@@ -2,7 +2,7 @@
 
 -------------
 <p align="center">
-  <img src='imgs/ASHURE_full_diagram.png' width='300' height='300'>
+  <img src='imgs/ASHURE_full_diagram.png' width='400' height='200'>
 </p>
 
 -------------
