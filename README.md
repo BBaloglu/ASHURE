@@ -1,5 +1,3 @@
-# ASHURE: A Python based bioinformatics toolkit for analysis of bulk environmental DNA from nanopore sequencing
-
 -------------
 <p align="center">
   <img src='imgs/ASHURE_full_diagram.png' width='400' height='200'>
@@ -15,7 +13,7 @@ The sensitivity and speed of the pipeline is dependent on the quality of the ref
 
 Sequence clusters are generated in the last step of the pipeline using a density based clustering approach called OPTICS. Traditional OTU thresholding approaches do not work with nanopore data because the error profile of each read is unpredictable. Density based clustering is more suited for these situations because OTU boundaries are adaptively called based on the divergence in local sequence identity. This method requires sufficient coverage around a true amplicon for clustering to work. An interative demo of how this approach works can be found in [clustering.ipynb](https://bbaloglu.github.io/pages/ashure/clustering.html).
 
-# Getting started
+## Getting started
 ```bash
 ./ashure.py -h                                                 # prints help
 ./ashure.py run -h                                             # prints help on a submodule
