@@ -170,24 +170,6 @@ def load_primers(primer_file):
         if (c in df.columns) == False:
             logging.error('column '+c+' not found in '+primer_file)
             sys.exit(1)
-    # remove spaces in primer names because minimap2 can miss names
-    df = check_id(df, cols=['fwd_id','rev_id'])
-    return df
-
-def check_id(df, cols=['id']):
-    '''
-    Removes spaces in entry of designated colums. Minimap2 truncates sequence id if they contain spaces.
-    df = dataframe contains [col1, col2, ...]
-    cols = [col1, col2, ...] where entries need spaces removed
-    return dataframe with columns free of spaces in each entry
-    '''
-    for col in cols:
-        for i in range(0,len(df)):
-            old_id = df.iloc[i][col]
-            new_id = old_id.replace(' ','_')
-            df.iloc[i][col] = new_id
-            if old_id !=new_id:
-                logging.warning('check_id: in '+col+', '+old_id+' changed to '+new_id)
     return df
 
 def add_seq(df):

@@ -1048,7 +1048,6 @@ def main():
     # load reference database
     if config['run_fgs']:
         ref = bpy.load_file(config['db_file'])
-        ref = bpy.check_id(ref, cols=['id'])
 
     if config['run_fgs']:
         # search for RCA fragments in reads
