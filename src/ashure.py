@@ -22,7 +22,7 @@ import bilge_pype as bpy
 
 #########################################################################################################
 
-def generate_pseudo_refdb(primers, reads, block=10000, fs='500-1000', workspace='./pseudo_refdb/', config='-x map-ont'):
+def generate_pseudo_refdb(primers, reads, block=10000, fs='500-1000', fpmr_thresh=10, workspace='./pseudo_refdb/', config='-x map-ont'):
     '''
     Build reference database using paired end search of some primer sequences in the uncorrected reads
     primers   = dataframe containing primer information with columns:
@@ -68,7 +68,7 @@ def generate_pseudo_refdb(primers, reads, block=10000, fs='500-1000', workspace=
         N_chunks = np.ceil(len(reads[s])/block)
         for i, df_i in enumerate(np.array_split(reads[s], N_chunks)):
             logging.info('Working on '+str(i)+'/'+str(N_chunks)+' block size='+str(block)+' read size='+str(s1)+' to '+str(s2)+' bp')
-            out = match_primer_to_read(primers, df_i, workspace=workspace, config=config)            
+            out = match_primer_to_read(primers, df_i, thresh=fpmr_thresh, workspace=workspace, config=config)            
             if len(out) > 0:
                 data.append(out)
     if len(data)==0:
@@ -809,6 +809,9 @@ def main():
     parser.add_argument('-spoa', dest='spoa_path', type=str, help='path to spoa executable')
     config['minimap2_path'] = 'minimap2'
     parser.add_argument('-minimap2', dest='minimap2_path', type=str, help='path to minimap2 executable')
+    config['low_mem']=False
+    parser.add_argument('--low_mem', dest='low_mem', action='store_true', help='enable optimizations that reduce RAM used')
+   
     # add subcommands for modifying the run configuration 
     subparser = parser.add_subparsers(title='subcommands', dest='subcommand')
     run_parser = subparser.add_parser('run', formatter_class=argparse.RawTextHelpFormatter, help='suboptions for running the pipeline')
@@ -835,8 +838,6 @@ def main():
     config['cout_file']='clusters.csv.gz'
     run_parser.add_argument('-o4', dest='cout_file', type=str, help='output csv file for sequence of cluster centers')
     config['log_file']='ashure.log'
-    config['low_mem']=False
-    run_parser.add_argument('--low_mem', dest='low_mem', action='store_true', help='enable optimizations that reduce RAM used')
     run_parser.add_argument('-log', dest='log_file', type=str, help='log file where pipeline progress is logged')
     config['config_file']=''
     run_parser.add_argument('-c', dest='config_file', type=str,
@@ -871,7 +872,7 @@ def main():
             help='''csv file containing forward and reverse primers used.
     This must have at least columns [fwd_id, fwd_seq, rev_id, rev_seq]''')
     prfg_parser.add_argument('-o', dest='db_file', type=str, help='output csv file of pseudo reference sequences')
-    prfg_parser.add_argument('--low_mem', dest='low_mem', action='store_true', help='enable optimizations that reduce RAM used')
+    prfg_parser.add_argument('-th', dest='prfg_pmr_thresh', type=int, help='threshold overlap allowed between primers')
 
     # config for repeat frag finder
     fgs_parser = subparser.add_parser('fgs', help='suboptions for repeat fragment finder')
@@ -884,7 +885,6 @@ def main():
     fgs_parser.add_argument('-o', dest='frag_folder', type=str, help='folder where frags csv files are stored')
     fgs_parser.add_argument('-r', dest='run_fgs', action='store_true', help='run repeat fragment finder')
     fgs_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
-    fgs_parser.add_argument('--low_mem', dest='low_mem', action='store_true', help='enable optimizations that reduce RAM used')
 
     # config for multi-sequence alignment
     msa_parser = subparser.add_parser('msa', help='suboptions for multi-sequence alignment')
@@ -898,7 +898,6 @@ def main():
     msa_parser.add_argument('-r1', dest='run_msa', action='store_true', help='run multi-sequence alignment')
     msa_parser.add_argument('-r2', dest='run_cons', action='store_true', help='read consensus after multi-sequence alignment')
     msa_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
-    msa_parser.add_argument('--low_mem', dest='low_mem', action='store_true', help='enable optimizations that reduce RAM used')
     config['msa_metric'] = 'AS'
     msa_parser.add_argument('-m', dest='msa_metric', type=str, help='metric used to determine the best concatemer')
     config['msa_thresh'] = 50
@@ -917,14 +916,14 @@ def main():
     config['fpmr_config']='-k5 -w1 -s 20 -P'
     fpmr_parser.add_argument('-c', dest='fpmr_config', help='config options passed to minimap2 aligner')
     fpmr_parser.add_argument('-i', dest='cons_file', help='input untrimmed consensus csv files')
-    fpmr_parser.add_argument('-p', dest='primer_file', type=str,
-            help='''csv file containing forward and reverse primers used.
-    This must have at least columns [fwd_id, fwd_seq, rev_id, rev_seq]''')
+    fpmr_parser.add_argument('-p', dest='primer_file', type=str, help='csv file containing forward and reverse primers used. This must have at least columns [fwd_id, fwd_seq, rev_id, rev_seq]')
     fpmr_parser.add_argument('-o1', dest='pmatch_file', help='csv file containing primer match information')
     fpmr_parser.add_argument('-o2', dest='cin_file', help='csv file containing trimmed consensus reads')
     fpmr_parser.add_argument('-s', dest='config_file', type=str, help='write settings to configuration file')
     fpmr_parser.add_argument('-r1', dest='run_fpmr', action='store_true', help='run primer matching')
     fpmr_parser.add_argument('-r2', dest='run_trmc', action='store_true', help='trim primers from reads')
+    config['fpmr_thresh'] = 10
+    fpmr_parser.add_argument('-th', dest='fmpr_thresh', type=int, help='threshold overlap allowed between primers found')
 
     # config for clustering
     clst_parser = subparser.add_parser('clst', help='suboptions for clustering')
@@ -999,8 +998,9 @@ def main():
     logging.info('spoa_path     = '+config['spoa_path'])
     logging.info('config_file = '+config['config_file'])
     logging.info('primer_file = '+config['primer_file'])
-    logging.info('pseudo_fs   = '+config['prfg_fs'])
+    logging.info('prfg_fs     = '+config['prfg_fs'])
     logging.info('prfg_config = '+config['prfg_config'])
+    logging.info('prfg_pmr_thresh = '+str(config['prfg_pmr_thresh']))
     logging.info('db_file     = '+config['db_file'])
     logging.info('N fastq     = '+str(len(config['fastq'])))
     logging.info('frag_folder = '+config['frag_folder'])
@@ -1015,6 +1015,7 @@ def main():
     logging.info('msa_thread_lock  = '+str(config['msa_thread_lock']))
     logging.info('cons_file        = '+config['cons_file'])
     logging.info('fpmr_config      = '+config['fpmr_config'])
+    logging.info('fpmr_thresh      = '+str(config['fpmr_thresh']))
     logging.info('pmatch_file      = '+config['pmatch_file'])
     logging.info('cin_file         = '+config['cin_file'])
     logging.info('cout_file        = '+config['cout_file'])
@@ -1058,7 +1059,7 @@ def main():
         primers = bpy.load_primers(config['primer_file'])
         # generate pseudo reference database using primer info
         logging.info('Generating pseudo reference database')
-        ref = generate_pseudo_refdb(primers, reads, block=10000, fs=config['prfg_fs'], config=config['prfg_config'])
+        ref = generate_pseudo_refdb(primers, reads, block=10000, fs=config['prfg_fs'], fpmr_thresh=config['prfg_pmr_thresh'], config=config['prfg_config'])
         ref.to_csv(config['db_file'], index=False, compression='infer')
 
     # load reference database
@@ -1112,7 +1113,7 @@ def main():
         
         # match the primers to consensus reads        
         logging.info('Matching primers to reads')
-        df = match_primer_to_read(primers, df[['id','sequence']], config=config['fpmr_config'])
+        df = match_primer_to_read(primers, df[['id','sequence']], thresh=config['fpmr_thresh'], config=config['fpmr_config'])
         if len(df) == 0:
             logging.error('Fwd and Rev primers were not found in reads')
             sys.exit(1)
