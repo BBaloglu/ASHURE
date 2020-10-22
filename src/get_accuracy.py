@@ -76,6 +76,8 @@ def main():
     parser.add_argument('-all', action='store_true', help='''Report all alignments or not.''')
     parser.add_argument('-wf', dest='workspace', type=str, default='./aligner_folder/',
                         help='''Workspace folder for the aligner''')
+    parser.add_argument('-bin', dest='bin_path', type=str, help='path to the aligner')
+
     args = parser.parse_args()  
     print('query file       = ', args.qfile)
     print('database file    = ', args.dfile)
@@ -92,16 +94,25 @@ def main():
     B = load_file(args.dfile, args.run_info)
     # Run the aligner
     if args.aligner=='bowtie2':
+        if args.bin_path!=None:
+            bpy._bowtie2 = args.bin_path
+            bpy.check_toolchain()
         print('Running bowtie2')
         configs = '--very-sensitive-local'
         data = bpy.run_bowtie2(A[['id','sequence']], B[['id','sequence']], workspace, configs)
         metric = 'AS'
     elif args.aligner=='bwa':
+        if args.bin_path!=None:
+            bpy._bwa = args.bin_path
+            bpy.check_toolchain()
         print('Running bwa')
         configs = 'mem -a -L 100'
         data = bpy.run_bwa(A[['id','sequence']], B[['id','sequence']], workspace, configs)
-        metric = 'AS'
+                metric = 'AS'
     elif args.aligner=='minimap2':
+        if args.bin_path!=None:
+            bpy._bowtie2 = args.bin_path
+            bpy.check_toolchain()
         print('Running minimap2')
         configs = '-k8 -w1 --score-N 0'
         data=bpy.run_minimap2(A[['id','sequence']], B[['id','sequence']], workspace, configs, cigar=True, build_index=True, use_index=True)
