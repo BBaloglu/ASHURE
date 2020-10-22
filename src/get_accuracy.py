@@ -111,7 +111,7 @@ def main():
         metric = 'AS'
     elif args.aligner=='minimap2':
         if args.bin_path!=None:
-            bpy._bowtie2 = args.bin_path
+            bpy._minimap2 = args.bin_path
             bpy.check_toolchain()
         print('Running minimap2')
         configs = '-k8 -w1 --score-N 0'
