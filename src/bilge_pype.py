@@ -672,6 +672,14 @@ def run_minimap2(query, database, workspace='./minimap2/', config='-x map-ont', 
     dbfile = workspace+'database.fq'
     outfile = workspace+'results.paf'
     btfile = workspace+'index.mmi'
+    # remove spaces from id and save the mapping
+    if 'fwd_id' in query.columns:
+        query, fmap = aligner_fix_name(query, col='fwd_id')
+        query, rmap = aligner_fix_name(query, col='rev_id')
+    else:
+        query, qmap = aligner_fix_name(query, col='id')
+    database, dbmap = aligner_fix_name(database, col='id')
+    
     # write aligner input 
     paired = aligner_write_input(qfile, mfile, dbfile, query, database)
     if cigar: # adds flag to generate cigar string
@@ -692,6 +700,13 @@ def run_minimap2(query, database, workspace='./minimap2/', config='-x map-ont', 
     subprocess.run(cmd.split(' '))
     # extract the PAF file information
     data = parse_PAF(outfile)
+    # add spaces back to the sequences
+    if 'fwd_id' in query.columns:
+        data = aligner_restore_name(data, fmap, col='query_id')
+        data = aligner_restore_name(data, rmap, col='query_id')
+    else:
+        data = aligner_restore_name(data, qmap, col='query_id')
+    data = aligner_restore_name(data, dbmap, col='database_id')
     # Format the fields to integer
     x = ['q_len','q_start','q_end','t_len','t_start','t_end','match','tot','mapq','cm','s1','s2','NM','AS','ms','nn','rl']
     for i in x:
@@ -706,6 +721,27 @@ def run_minimap2(query, database, workspace='./minimap2/', config='-x map-ont', 
     if cleanup and ~use_index:
         subprocess.run(['rm','-r',workspace])
     return data
+
+def aligner_fix_name(df, col='id'):
+    '''
+    Removes spacing in the names that causes minimap2 to truncate read ids
+    df = dataframe column containing the old id
+    col = column with in the old id
+    returns fixed dataframe and id mapping between old and new names
+    '''
+    revmap = {df.iloc[i][col].replace(' ','_')+str(i):df.iloc[i][col] for i in range(0,len(df))}
+    df[col] = list(revmap.keys())
+    return df, revmap
+
+def aligner_restore_name(df, revmap, col='id'):
+    '''
+    Restore spaces in the names
+    df = dataframe with column containing the new id
+    revmap = dictionary containing mapping of new id to old id
+    col = column name containing the id restore
+    '''
+    df[col] = [revmap[df.iloc[i][col]] for i in range(0,len(df))]
+    return df
 
 def aligner_get_similarity(data):
     '''
