@@ -715,7 +715,7 @@ def aligner_fix_name(df, col='id'):
     '''
     out = df.copy()
     revmap = {str(i)+'_'+out.iloc[i][col].replace(' ','_'):out.iloc[i][col] for i in range(0,len(df))}
-    out.iloc[:,col] = revmap.keys()
+    out.loc[:,col] = revmap.keys()
     return out, revmap
 
 def aligner_restore_name(df, revmap, col='id'):
@@ -725,7 +725,7 @@ def aligner_restore_name(df, revmap, col='id'):
     revmap = dictionary containing mapping of new id to old id
     col = column name containing the id restore
     '''
-    df.iloc[:,col] = [revmap[df.iloc[i][col]] for i in range(0,len(df))]
+    df.loc[:,col] = [revmap[df.iloc[i][col]] for i in range(0,len(df))]
     return df
 
 def aligner_get_similarity(data):
