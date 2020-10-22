@@ -198,12 +198,18 @@ def annotate_reads(df):
     col = ['query_id','N frags','1D2','q_len','q_unmapped','db_fwd_cover','db_rev_cover','match_size','avg_match','avg_AS','std_AS']
     return pd.DataFrame(df_frag, columns=col)
 
-def perform_MSA(df, frags, batch_size=100, folder='./msa/', thread_lock=True, config='-l 0 -r 2'):
+def perform_MSA(df, frags, batch_size=100, folder='./msa/', gap_thresh=4, padding=0, thread_lock=True, config='-l 0 -r 2'):
     '''
     This function performs multisequence alignment on RCA reads
     df     = dataframe containing the original read fastq information
     frags  = RCA fragments with start and stop locations found by the previous aligner
     output = folder containing file of aligned RCA reads
+    folder = work folder
+    batch_size = number of parallel calls to multi-alignment tool
+    thread_lock = synchronize subprocess calls to spoa
+    padding = how much extra nucleotides to pad each side of the concatemer. Useful for capturing primers, but can generate concatemers in consensus sequence
+    gap_thresh = if gap between concatemers is less than 1/x of the concatemer, set concatemer boundary in the middle of the gap
+    config = parameters passed to multi-alignment tool
     '''
     # make workspace folder if it does not exist
     folder = bpy.check_dir(folder)
@@ -236,12 +242,16 @@ def perform_MSA(df, frags, batch_size=100, folder='./msa/', thread_lock=True, co
             # if read orientations match and gaps are not big, try merging them
             if i > 0 and data[i,4]==data[i-1,4]:
                 g1 = data[i,2] - data[i-1,3]
-                if g1*4 < data[i,3]-data[i,2]:
+                if g1*gap_thresh < data[i,3]-data[i,2]:
                     s1 = int((data[i,2]+data[i-1,3])/2)
+                else:
+                    s1 = np.max([s1 + padding, 0])
             if i+1 < len(data) and data[i,4]==data[i+1,4]:
                 g2 = data[i+1,2] - data[i,3]
-                if g2*4 < data[i,3]-data[i,2]:
+                if g2*gap_thresh < data[i,3]-data[i,2]:
                     s2 = int((data[i,3]+data[i+1,2])/2)
+                else:
+                    s2 = np.min([s2 + padding, data[i,1]])
             # check that averaging did not create weird boundaries
             if s2 - s1 > 10:
                 # slice out the sequences
@@ -897,7 +907,11 @@ def main():
     msa_parser.add_argument('-bs', dest='msa_batch_size', type=int, help='batch size for spoa subprocess calls')
     config['msa_thread_lock'] = False
     msa_parser.add_argument('-lock', dest='msa_thread_lock', action='store_true', help='make sure threads in sync for multi-alignment')
-    
+    config['msa_gap_thresh'] = 4
+    msa_parser.add_argument('-gth', dest='msa_gap_thresh', type=int, help='if gap between concatemers less than 1/x of the concatemer, set boundary in the middle of the gap')
+    config['msa_padding'] = 0
+    msa_parser.add_argument('-pd', dest='msa_padding', type=int, help='extra nucleotide padding to add to concatemer on both 5\' and 3\' ends. Useful for capturing primers, but can cause concatemers in consensus sequence.')
+
     # config for matching primers to reads
     fpmr_parser = subparser.add_parser('fpmr', help='suboptions for matching primers to consensus reads')
     config['fpmr_config']='-k5 -w1 -s 20 -P'
@@ -996,6 +1010,8 @@ def main():
     logging.info('msa_metric  = '+config['msa_metric'])
     logging.info('msa_thresh  = '+str(config['msa_thresh']))
     logging.info('msa_batch_size   = '+str(config['msa_batch_size']))
+    logging.info('msa_gap_thresh   = '+str(config['msa_gap_thresh']))
+    logging.info('msa_padding      = '+str(config['msa_padding']))
     logging.info('msa_thread_lock  = '+str(config['msa_thread_lock']))
     logging.info('cons_file        = '+config['cons_file'])
     logging.info('fpmr_config      = '+config['fpmr_config'])
@@ -1071,7 +1087,7 @@ def main():
         
         # Run multi-sequence alignment on fragments
         logging.info('Running multi-sequence aligner')
-        perform_MSA(reads, frags[frags['N frags'] > 1], batch_size=config['msa_batch_size'], config=config['msa_config'], thread_lock=config['msa_thread_lock'], folder=config['msa_folder'])
+        perform_MSA(reads, frags[frags['N frags'] > 1], batch_size=config['msa_batch_size'], gap_thresh=config['msa_gap_thresh'], padding=config['msa_padding'], config=config['msa_config'], thread_lock=config['msa_thread_lock'], folder=config['msa_folder'])
         logging.info('multi-sequence alignment done')
 
     # Generate consensus sequence and save the info
