@@ -872,6 +872,7 @@ def main():
             help='''csv file containing forward and reverse primers used.
     This must have at least columns [fwd_id, fwd_seq, rev_id, rev_seq]''')
     prfg_parser.add_argument('-o', dest='db_file', type=str, help='output csv file of pseudo reference sequences')
+    config['prfg_pmr_thresh'] = 10
     prfg_parser.add_argument('-th', dest='prfg_pmr_thresh', type=int, help='threshold overlap allowed between primers')
 
     # config for repeat frag finder
