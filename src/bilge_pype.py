@@ -729,8 +729,8 @@ def aligner_fix_name(df, col='id'):
     col = column with in the old id
     returns fixed dataframe and id mapping between old and new names
     '''
-    revmap = {str(i)+df.iloc[i][col].replace(' ','_'):df.iloc[i][col] for i in range(0,len(df))}
     out = df.copy()
+    revmap = {str(i)+out.iloc[i][col].replace(' ','_'):out.iloc[i][col] for i in range(0,len(df))}
     out[col] = revmap.keys()
     return out, revmap
 
