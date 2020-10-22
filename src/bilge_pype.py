@@ -48,10 +48,11 @@ def check_toolchain():
     toolchain = [_minimap2, _bwa, _bowtie2, _spoa, _mafft]
     # check if the tool exists
     for i in toolchain:
-        if i != distutils.spawn.find_executable(i):
+		loc = distutils.spawn.find_executable(i)
+        if loc==None:
             logging.warning('check_toolchain: '+i+' not found')
         else:
-            logging.info('check_toolchain: '+i+' found')
+            logging.info('check_toolchain: '+loc+' found')
 
 def init_log(fname=None, level='DEBUG'):
     '''
