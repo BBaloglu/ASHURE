@@ -690,6 +690,14 @@ def run_minimap2(query, database, workspace='./minimap2/', config='-x map-ont', 
     else:
         data = aligner_restore_name(data, qmap, col='query_id')
     data = aligner_restore_name(data, dbmap, col='database_id')
+    
+    if 'fwd_id' in query.columns:
+        query = aligner_restore_name(query, fmap, col='fwd_id')
+        query = aligner_restore_name(query, rmap, col='rev_id')
+    else:
+        query = aligner_restore_name(query, qmap, col='id')
+    database = aligner_restore_name(database, dbmap, col='id')
+
     # Format the fields to integer
     x = ['q_len','q_start','q_end','t_len','t_start','t_end','match','tot','mapq','cm','s1','s2','NM','AS','ms','nn','rl']
     for i in x:
@@ -712,7 +720,8 @@ def aligner_fix_name(df, col='id'):
     col = column with in the old id
     returns fixed dataframe and id mapping between old and new names
     '''
-    out = df.copy()
+    #out = df.copy()
+    out = df
     revmap = {str(i)+'_'+out.iloc[i][col].replace(' ','_'):out.iloc[i][col] for i in range(0,len(df))}
     out[col] = revmap.keys()
     return out, revmap
