@@ -730,7 +730,7 @@ def aligner_fix_name(df, col='id'):
     returns fixed dataframe and id mapping between old and new names
     '''
     revmap = {str(i)+df.iloc[i][col].replace(' ','_'):df.iloc[i][col] for i in range(0,len(df))}
-    df.iloc[:][col] = list(revmap.keys())
+    df[col] = revmap.keys()
     return df, revmap
 
 def aligner_restore_name(df, revmap, col='id'):
