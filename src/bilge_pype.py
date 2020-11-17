@@ -1,6 +1,32 @@
 #!/usr/bin/env python
-# Helper tools for sequence data
-# bbaloglu@uoguelph.ca
+'''
+bilge_pype.py
+
+Copyright (C) 2020, Bilgenur Baloglu.
+All rights reserved.
+
+Contact: Bilgenur Baloglu <bbaloglu@uoguelph.ca>,
+Centre for Biodiversity Genomics
+University of Guelph, Guelph, Canada
+
+This software is available under the GNU Lesser General Public
+License version 3.
+
+GNU Lesser General Public License version 3
+
+This program is free software: you can redistribute it and/or 
+modify it under the terms of the GNU Lesser General Public License
+as published by the Free Software Foundation, either version 3
+of the License, or any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+A copy of the GNU Lesser General Public License has been included
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+'''
 
 # Loading the libraries
 import numpy as np
