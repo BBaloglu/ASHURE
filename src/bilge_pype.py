@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 '''
-bilge_pype.py
+Bilge_Pype: Bilge's Python Processing Environment
 
 Copyright (C) 2020, Bilgenur Baloglu.
 All rights reserved.
