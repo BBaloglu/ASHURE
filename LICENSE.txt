@@ -1,6 +1,6 @@
 ASHURE: A sure heuristic under random events
 
-Copyright (C) 2020, Bilgenur Baloglu, Zhewei Chen, and Dirk Steinke.
+Copyright (C) 2020, Bilgenur Baloglu and Dirk Steinke.
 All rights reserved.
 
 Contact: Bilgenur Baloglu <bbaloglu@uoguelph.ca>,
