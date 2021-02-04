@@ -122,6 +122,8 @@ Read our paper here: https://www.researchgate.net/publication/348872449_A_workfl
 If you use ASHURE in your work, please cite:
 
     Baloğlu, B., Chen, Z., Elbrecht, V., Braukmann, T., MacDonald, S. and Steinke, D. (2021), A workflow for accurate metabarcoding using nanopore MinION sequencing. Methods in Ecology and Evolution. Accepted Author Manuscript. https://doi.org/10.1111/2041-210X.13561
+    
+    Baloğlu, B. & Chen, Z. (2021). ASHURE. Version 1.0.0. Zenodo. DOI: 10.5281/zenodo.4450611
 
 ## Contact information
 
