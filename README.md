@@ -117,11 +117,11 @@ Example usage from the clustering module
 
 ## Citing ASHURE
 
-Read our preprint here: https://www.biorxiv.org/content/10.1101/2020.05.21.108852v1.full.pdf
+Read our paper here: https://www.researchgate.net/publication/348872449_A_workflow_for_accurate_metabarcoding_using_nanopore_MinION_sequencing
 
 If you use ASHURE in your work, please cite:
 
-    Baloğlu, B. et al. (2020). “A Workflow for Accurate Metabarcoding Using Nanopore MinION Sequencing.” bioRxiv: 2020.05.21.108852. http://biorxiv.org/content/early/2020/05/25/2020.05.21.108852
+    Baloğlu, B., Chen, Z., Elbrecht, V., Braukmann, T., MacDonald, S. and Steinke, D. (2021), A workflow for accurate metabarcoding using nanopore MinION sequencing. Methods in Ecology and Evolution. Accepted Author Manuscript. https://doi.org/10.1111/2041-210X.13561
 
 ## Contact information
 
