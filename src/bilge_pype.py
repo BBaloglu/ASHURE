@@ -39,6 +39,8 @@ import sklearn
 import sklearn.cluster
 import sklearn.decomposition
 import hdbscan
+import parasail
+
 # For interfacing with the file system
 import subprocess
 import os
@@ -443,6 +445,24 @@ def load_file(fname):
     else:
         logging.info('Failed to load '+fname)
         sys.exit(1)
+
+def run_parasail_aligner(query, database, gp=-1, gx=-1, mat=parasail.nuc44):
+    '''
+    Wrapper for parasail aligner
+    query = query sequence
+    database = database sequence
+    gp = gap open penalty
+    gx = gap extension penalty
+    mat = parasail penalty matrix
+    '''
+    pattern = re.compile('([0-9]*)([DI=SX])')
+ 
+    profile = parasail.profile_create_16(database, mat)
+    result = parasail.sg_trace_scan_sat(profile, query, -gp, -gx, mat)
+    cigar = result.cigar.decode.decode('utf-8')
+    out = [q_start, q_end, q_len, t_start, t_end, t_len, cigar, result.score]
+    print(out)
+    return result
 
 def get_SAM_info(read, key):
     '''
