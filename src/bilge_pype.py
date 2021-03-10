@@ -38,13 +38,13 @@ import scipy.signal
 import sklearn
 import sklearn.cluster
 import sklearn.decomposition
-import hdbscan
 import parasail
 
 # For interfacing with the file system
 import subprocess
 import os
 import distutils.spawn
+import re
 # file handling
 import bz2
 import gzip
@@ -446,23 +446,53 @@ def load_file(fname):
         logging.info('Failed to load '+fname)
         sys.exit(1)
 
-def run_parasail_aligner(query, database, gp=-1, gx=-1, mat=parasail.nuc44):
+def run_parasail_aligner(query, database, gp=-1, gx=-1, mat=parasail.nuc44, fwd_only=True):
     '''
     Wrapper for parasail aligner
-    query = query sequence
-    database = database sequence
+    query = pandas dataframe of query sequences with columns [id, sequence]
+    database = pandas dataframe of database sequences with columns [id, sequence]
     gp = gap open penalty
     gx = gap extension penalty
     mat = parasail penalty matrix
+    returns dataframe of alignments
     '''
-    pattern = re.compile('([0-9]*)([DI=SX])')
- 
-    profile = parasail.profile_create_16(database, mat)
-    result = parasail.sg_trace_scan_sat(profile, query, -gp, -gx, mat)
-    cigar = result.cigar.decode.decode('utf-8')
-    out = [q_start, q_end, q_len, t_start, t_end, t_len, cigar, result.score]
-    print(out)
-    return result
+    data = []
+    for did, dseq in database[['id','sequence']]:
+        profile = parasail.profile_create_16(database, mat)
+        for qid, qseq in query[['id','sequence']]:
+            result = parasail.sg_dx_trace_scan_profile_16(profile, query, gp, gx)
+            cigar = result.cigar.decode.decode('utf-8')
+            cig = cigar_decode(cigar)
+            # compute match boundaries
+            q_start = 0
+            q_end = len(query)
+            t_start = 0
+            t_end = len(database)
+            if cig[0][1]=='I':
+                t_start = cig[0][0]
+            elif cig[0][1]=='D':
+                q_start = cig[0][0]
+            if cig[-1][1]=='I':
+                t_end-= cig[-1][0]
+            elif cig[-1][1]=='D':
+                q_end-= cig[-1][0]
+            x = np.array([cig[i][0] for i in range(len(cig))])
+            y = np.array([cig[i][1] for i in range(len(cig))])
+            # get number of matches and mismatches
+            match = np.sum(x[y=='='])
+            xmatch = np.sum(x[y=='X'])
+            L = np.min([q_end-q_start, t_end-t_start])
+            data.append([qid, q_start, q_end, len(query), did, t_start, t_end, len(database), '+', result.score, xmatch, match, match/L, cigar])
+    col = ['query_id','q_start','q_end','q_len','database_id','t_start','t_end','t_len','orientation','AS','X','match','similarity','cigar']
+    data = pd.DataFrame(data, columns=col)
+    return data
+
+def cigar_decode(cigar, key='([0-9]*)([DI=SX])'):
+    '''
+    Decode cigar strings
+    '''
+    pattern = re.compile(key)
+    return [[int(i),j] for i,j in pattern.findall(cigar)]
 
 def get_SAM_info(read, key):
     '''
