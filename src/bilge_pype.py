@@ -446,7 +446,7 @@ def load_file(fname):
         logging.info('Failed to load '+fname)
         sys.exit(1)
 
-def run_parasail_aligner(query, database, gp=-1, gx=-1, mat=parasail.nuc44, fwd_only=True):
+def run_parasail_aligner(query, database, gp=1, gx=1, mat=parasail.nuc44):
     '''
     Wrapper for parasail aligner
     query = pandas dataframe of query sequences with columns [id, sequence]
@@ -458,34 +458,52 @@ def run_parasail_aligner(query, database, gp=-1, gx=-1, mat=parasail.nuc44, fwd_
     '''
     data = []
     for did, dseq in database[['id','sequence']]:
-        profile = parasail.profile_create_16(database, mat)
+        profile = parasail.profile_create_16(dseq, mat)
         for qid, qseq in query[['id','sequence']]:
-            result = parasail.sg_dx_trace_scan_profile_16(profile, query, gp, gx)
-            cigar = result.cigar.decode.decode('utf-8')
-            cig = cigar_decode(cigar)
-            # compute match boundaries
-            q_start = 0
-            q_end = len(query)
-            t_start = 0
-            t_end = len(database)
-            if cig[0][1]=='I':
-                t_start = cig[0][0]
-            elif cig[0][1]=='D':
-                q_start = cig[0][0]
-            if cig[-1][1]=='I':
-                t_end-= cig[-1][0]
-            elif cig[-1][1]=='D':
-                q_end-= cig[-1][0]
-            x = np.array([cig[i][0] for i in range(len(cig))])
-            y = np.array([cig[i][1] for i in range(len(cig))])
-            # get number of matches and mismatches
-            match = np.sum(x[y=='='])
-            xmatch = np.sum(x[y=='X'])
-            L = np.min([q_end-q_start, t_end-t_start])
-            data.append([qid, q_start, q_end, len(query), did, t_start, t_end, len(database), '+', result.score, xmatch, match, match/L, cigar])
-    col = ['query_id','q_start','q_end','q_len','database_id','t_start','t_end','t_len','orientation','AS','X','match','similarity','cigar']
+            # fwd orientation
+            result = parasail.sg_dx_trace_scan_profile_16(profile, qseq, gp, gx)
+            stats = parasail_get_stats(results)
+            stats = [qid, len(qseq), did, len(dseq), '+'] + stats + [results.score, results.cigar]
+            data.append(stats)
+            # rev orientation
+            qseqR = dna_revcomp(qseq)
+            result = parasail.sg_dx_trace_scan_profile_16(profile, qseqR, gp, gx)
+            stats = parasail_get_stats(results)
+            stats = [qid, len(qseq), did, len(dseq), '-'] + stats + [results.score, results.cigar]
+            data.append(stats)
+    col = ['query_id','q_len','database_id','t_len','orientation','q_start','q_end','t_start','t_end','mismatch','match','AS','cigar']
     data = pd.DataFrame(data, columns=col)
+    # compute other stats
+    data['q_end'] = data['q_len'] + data['q_end']
+    data['t_end'] = data['t_len'] + data['t_end']
+    L = np.min([data['q_end'] - data['q_start'], data['t_end'] - data['t_start']], axis=1)
+    data['similarity'] = data['match']/L
     return data
+
+def parasail_get_stats(results):
+    '''
+    Get alignment statistics associated with parasail output
+    '''
+    cig = cigar_decode(result.cigar.decode.decode('utf-8'))
+    # compute match boundaries
+    q_start = 0
+    q_end = 0
+    t_start = 0
+    t_end = 0
+    if cig[0][1]=='I':
+        t_start = cig[0][0]
+    elif cig[0][1]=='D':
+        q_start = cig[0][0]
+    if cig[-1][1]=='I':
+        t_end = -cig[-1][0]
+    elif cig[-1][1]=='D':
+        q_end = -cig[-1][0]
+    x = np.array([cig[i][0] for i in range(len(cig))])
+    y = np.array([cig[i][1] for i in range(len(cig))])
+    # get number of matches and mismatches
+    M = np.sum(x[y=='='])
+    Xm = np.sum(x[y=='X'])
+    return [q_start, q_end, t_start, t_end, Xm, M]
 
 def cigar_decode(cigar, key='([0-9]*)([DI=SX])'):
     '''
