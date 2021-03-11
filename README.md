@@ -63,7 +63,7 @@ pip install seaborn        # for making pretty matplotlib plots
 Ashure is written in python and is compatible with python3.6 and above. The following commands will install `ashure.py` to your local path.
 ```bash
 git clone https://github.com/bbaloglu/ashure  # clones this repository
-cd ashure                                     # enter the repository folder
+cd ashure/src                                 # enter the repository folder
 chmod +x ashure.py                            # make it executable
 ./ashure.py run -h                            # look at the help commands
 mv ashure.py ~/.local/bin/ashure              # adds ashure to local path
