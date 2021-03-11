@@ -53,6 +53,8 @@ Wrappers for the following aligners can also be called from `bilge_pype.py` Thes
 
 [bwa](https://github.com/lh3/bwa) and [bowtie2](https://github.com/BenLangmead/bowtie) for aligning miseq fastq
 
+[parasail](https://github.com/jeffdaily/parasail) for aligning short reads such as primers < 30bp.
+
 The following libraries are used in demo notebooks for data visualization
 ```bash
 pip install bokeh          # for making interative plots
