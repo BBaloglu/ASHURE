@@ -30,7 +30,7 @@ Sequence clusters are generated in the last step of the pipeline using a density
 ### Runtime dependencies
 [minimap2](https://github.com/lh3/minimap2) is used for sequence alignment
 
-[spoa](https://github.com/lh3/minimap2) is used for multi-sequence alignment
+[spoa](https://github.com/rvaser/spoa) is used for multi-sequence alignment
 
 Numpy, Scipy, Pandas, and Sklearn should also be installed via the following commands for pip
 ```bash
