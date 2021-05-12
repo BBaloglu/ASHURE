@@ -119,7 +119,7 @@ Example usage from the clustering module
 
 ## Citing ASHURE
 
-Read our paper here: https://www.researchgate.net/publication/348872449_A_workflow_for_accurate_metabarcoding_using_nanopore_MinION_sequencing
+Read our paper here: https://besjournals.onlinelibrary.wiley.com/doi/epdf/10.1111/2041-210X.13561
 
 If you use ASHURE in your work, please cite:
 
